@@ -1,0 +1,64 @@
+:root {
+  --sky-upper: #cfe3ee;
+  --sky-lower: #9fc2d4;
+  --sea-deep: #2a4d63;
+  --sea-surface: #4a7d95;
+  --soil: #5b4636;
+  --soil-tilled: #3f3125;
+  --grass: #6f8f5a;
+  --rock-top: #7b8087;
+  --rock-left: #5f646a;
+  --rock-right: #494d52;
+  --ui-panel: #1b2026;
+  --ui-border: #3b4650;
+  --ui-text: #e6edf3;
+  --ui-accent: #f2c14e;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--ui-panel);
+  color: var(--ui-text);
+}
+
+#app {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-rows: minmax(0, 1fr) 240px;
+  grid-template-areas:
+    'canvas editor'
+    'canvas panels';
+  height: 100vh;
+  width: 100vw;
+}
+
+#grid-canvas {
+  grid-area: canvas;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(var(--sky-upper), var(--sky-lower) 55%, var(--sea-surface));
+}
+
+#editor {
+  grid-area: editor;
+  border-left: 1px solid var(--ui-border);
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-panel);
+  overflow: auto;
+}
+
+#panels {
+  grid-area: panels;
+  border-left: 1px solid var(--ui-border);
+  background: var(--ui-panel);
+  overflow: auto;
+}
