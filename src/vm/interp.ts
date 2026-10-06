@@ -29,6 +29,8 @@ export type StepResult = 'slice' | 'done';
 export interface InterpOptions {
   builtins?: Record<string, (...args: unknown[]) => unknown>;
   hardCap?: number;
+  world?: unknown;
+  mote?: unknown;
 }
 
 interface LoamFunction {
@@ -136,9 +138,38 @@ export class Interp {
     this.hardCap = opts?.hardCap ?? HARD_OP_CAP;
     const reports: string[] = [];
     this.reports = reports;
-    const builtins = opts?.builtins ?? makeBuiltins({ reports, mote: null, world: null });
+    const builtins = opts?.builtins ?? makeBuiltins({ reports, mote: opts?.mote ?? null, world: opts?.world ?? null });
     for (const [k, v] of Object.entries(builtins)) this.env.set(k, v);
     this.root = this.runRoot(stmts);
+  }
+
+  callRule(fn: unknown, ctx: Record<string, unknown>): unknown {
+    if (typeof fn === 'function') return (fn as (c: unknown) => unknown)(ctx);
+    if (!isLoamFn(fn)) throw new Error('callRule expects a function');
+    const fn2 = fn as unknown as LoamFunction;
+    const saved: Array<{ name: string; had: boolean; val: unknown }> = [];
+    const bind = (name: string, val: unknown): void => {
+      saved.push({ name, had: this.env.has(name), val: this.env.get(name) });
+      this.env.set(name, val);
+    };
+    if (fn2.params.length > 0) bind(fn2.params[0], ctx);
+    for (let i = 1; i < fn2.params.length; i++) bind(fn2.params[i], null);
+    try {
+      const gen = this.execList(fn2.body);
+      for (;;) {
+        if (this.ops > this.hardCap) throw new OpCapError(this.ops);
+        const r = gen.next();
+        if (r.done) return null;
+      }
+    } catch (e) {
+      if (e instanceof ReturnSignal) return e.value;
+      throw e;
+    } finally {
+      for (const s of saved) {
+        if (s.had) this.env.set(s.name, s.val);
+        else this.env.delete(s.name);
+      }
+    }
   }
 
   getEnv(): Record<string, unknown> {
