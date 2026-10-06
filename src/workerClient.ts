@@ -5,7 +5,7 @@ import type { MoteJSON } from './game/drone';
 export type WorkerHandlers = {
   ready?: (version: string) => void;
   started?: (programId: string) => void;
-  tick?: (cells: CellDelta[]) => void;
+  tick?: (cells: CellDelta[], mote: { x: number; y: number; h: number; facing: string }) => void;
   event?: (kind: string, x: number, y: number, h: number, data: Record<string, unknown>) => void;
   console?: (lines: string[]) => void;
   stepped?: (line: number, locals: Record<string, unknown>) => void;
@@ -33,7 +33,7 @@ export class WorkerClient {
     switch (msg.type) {
       case 'ready': return this.handlers.ready?.(msg.version);
       case 'started': return this.handlers.started?.(msg.programId);
-      case 'tick': return this.handlers.tick?.(msg.cells);
+      case 'tick': return this.handlers.tick?.(msg.cells, msg.mote);
       case 'event': return this.handlers.event?.(msg.kind, msg.x, msg.y, msg.h, msg.data);
       case 'console': return this.handlers.console?.(msg.lines);
       case 'stepped': return this.handlers.stepped?.(msg.line, msg.locals);
@@ -49,7 +49,6 @@ export class WorkerClient {
     this.worker.postMessage(msg);
   }
 
-  // --- public API (Phase 3 deliverable) ---
   init(world: WorldJSON, mote: MoteJSON): void {
     this.send({ type: 'init', world, mote });
   }

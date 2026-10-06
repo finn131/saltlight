@@ -4,9 +4,10 @@ import { Mote } from './game/drone';
 import { WorkerClient } from './workerClient';
 import { bakeSprites, type SpriteAtlas } from './render/sprites';
 import { project, drawOrder, TILE_W, TILE_H, TILE_Z } from './render/iso';
-import { createCamera, clampZoom, clampPan, viewport, cullCells } from './render/camera';
+import { createCamera, clampZoom, clampPan, viewport, cullCells, worldExtents } from './render/camera';
 
-const GRID = 20;
+// ponytail: ROADMAP acceptance 2 measures a 40x40 grid with ~4000 visible tiles
+const GRID = 40;
 
 const world = new World({ width: GRID, height: GRID });
 const mote = new Mote();
@@ -18,11 +19,17 @@ if (!(canvasEl instanceof HTMLCanvasElement)) throw new Error('#grid-canvas miss
 const canvas: HTMLCanvasElement = canvasEl;
 const ctx: CanvasRenderingContext2D = canvas.getContext('2d')!;
 
+// ponytail: cache rect size — getBoundingClientRect per frame is a layout read
+let cssW = 1;
+let cssH = 1;
+
 function resize(): void {
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
-  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  cssW = Math.max(1, rect.width);
+  cssH = Math.max(1, rect.height);
+  canvas.width = Math.max(1, Math.floor(cssW * dpr));
+  canvas.height = Math.max(1, Math.floor(cssH * dpr));
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
@@ -31,27 +38,26 @@ const ANCHOR_Y = TILE_H / 2;
 
 // ponytail: render loop is blits only; all path work happens in bakeSprites
 function draw(): void {
-  const rect = canvas.getBoundingClientRect();
-  const w = rect.width;
-  const h = rect.height;
-  ctx.clearRect(0, 0, w, h);
+  ctx.clearRect(0, 0, cssW, cssH);
 
-  const ox = w / 2 + camera.x;
-  const oy = h / 4 + camera.y;
+  const ox = cssW / 2 + camera.x;
+  const { extentY } = worldExtents(camera);
+  const oy = cssH / 2 - (extentY * camera.zoom) / 2;
   const z = camera.zoom;
 
-  const vp = viewport(camera, w, h);
-  const visible = cullCells(world.getAllCells(), vp, w, h).sort(drawOrder);
+  const vp = viewport(camera, cssW, cssH);
+  const visible = cullCells(world.getAllCells(), vp, cssW, cssH).sort(drawOrder);
   for (const cell of visible) {
     const { sx, sy } = project(cell.x, cell.y, cell.h);
     const px = ox + sx * z - ANCHOR_X * z;
-    const py = oy + sy * z - ANCHOR_Y * z;
+    const py = oy + sy * z - ANCHOR_Y * z - TILE_Z * z;
     const terrain = atlas[cell.terrain];
     if (terrain) {
-      ctx.drawImage(terrain, px, py - TILE_Z * z, TILE_W * z, (TILE_H + TILE_Z * 2) * z);
+      ctx.drawImage(terrain, px, py, TILE_W * z, (TILE_H + TILE_Z * 2) * z);
     }
     if (cell.plant !== null) {
-      const crop = atlas[cell.plant + '_' + cell.growth] ?? atlas[cell.plant + '_0'];
+      const key = cell.plant + '_' + cell.growth;
+      const crop = atlas[key] ?? atlas[cell.plant + '_0'];
       if (crop) {
         ctx.drawImage(crop, px, py - TILE_H * z, TILE_W * z, TILE_H * 2 * z);
       }
@@ -59,9 +65,9 @@ function draw(): void {
   }
 
   const mp = project(mote.x, mote.y, mote.h);
-  const moteTile = atlas['soil'];
+  const moteTile = atlas['mote'];
   if (moteTile) {
-    ctx.drawImage(moteTile, ox + mp.sx * z - ANCHOR_X * z, oy + mp.sy * z - ANCHOR_Y * z, TILE_W * z, (TILE_H + TILE_Z * 2) * z);
+    ctx.drawImage(moteTile, ox + mp.sx * z - ANCHOR_X * z, oy + mp.sy * z - ANCHOR_Y * z - TILE_Z * z, TILE_W * z, (TILE_H + TILE_Z * 2) * z);
   }
 }
 
@@ -79,7 +85,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (!dragging) return;
   camera.x += e.clientX - lastX;
   camera.y += e.clientY - lastY;
-  clampPan(camera);
+  clampPan(camera, cssW, cssH);
   lastX = e.clientX;
   lastY = e.clientY;
 });
@@ -90,12 +96,18 @@ canvas.addEventListener('pointerup', (e) => {
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   camera.zoom = clampZoom(camera, camera.zoom * (e.deltaY < 0 ? 1.1 : 0.9));
-  clampPan(camera);
+  clampPan(camera, cssW, cssH);
 }, { passive: false });
 
+// ponytail: bounded so a 5-minute run cannot grow the log without limit
 const eventLog: string[] = [];
+function logLine(s: string): void {
+  eventLog.push(s);
+  if (eventLog.length > 200) eventLog.shift();
+}
+
 const client = new WorkerClient({
-  tick: (cells) => {
+  tick: (cells, pos) => {
     for (const c of cells) {
       const cell = world.get(c.x, c.y, c.h);
       if (!cell) continue;
@@ -104,18 +116,28 @@ const client = new WorkerClient({
       if (c.growth !== undefined) cell.growth = c.growth;
       if (c.moisture !== undefined) cell.moisture = c.moisture;
     }
+    mote.x = pos.x;
+    mote.y = pos.y;
+    mote.h = pos.h;
+    mote.facing = pos.facing as typeof mote.facing;
+  },
+  snapshot: (data) => {
+    mote.x = data.mote.x;
+    mote.y = data.mote.y;
+    mote.h = data.mote.h;
+    mote.facing = data.mote.facing;
   },
   event: (kind, x, y, h, data) => {
-    eventLog.push(`${kind} @(${x},${y},${h}) ${JSON.stringify(data)}`);
+    logLine(`${kind} @(${x},${y},${h}) ${JSON.stringify(data)}`);
   },
   console: (lines) => {
-    for (const l of lines) eventLog.push(`> ${l}`);
+    for (const l of lines) logLine(`> ${l}`);
   },
   error: (e) => {
-    eventLog.push(`ERROR ${e.phase} line ${e.line} col ${e.col}: ${e.message}`);
+    logLine(`ERROR ${e.phase} line ${e.line} col ${e.col}: ${e.message}`);
   },
   aborted: (a) => {
-    eventLog.push(`ABORTED ${a.reason} after ${a.ops} ops`);
+    logLine(`ABORTED ${a.reason} after ${a.ops} ops`);
   },
 });
 

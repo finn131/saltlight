@@ -18,7 +18,7 @@ export type ErrorPhase = 'tokenize' | 'parse' | 'runtime';
 export type FromWorker =
   | { type: 'ready'; version: string }
   | { type: 'started'; programId: string }
-  | { type: 'tick'; cells: CellDelta[] }
+  | { type: 'tick'; cells: CellDelta[]; mote: { x: number; y: number; h: number; facing: string } }
   | { type: 'event'; kind: string; x: number; y: number; h: number; data: Record<string, unknown> }
   | { type: 'console'; lines: string[] }
   | { type: 'stepped'; line: number; locals: Record<string, unknown> }
@@ -46,6 +46,7 @@ export class WorkerRuntime {
   private scheduler: Scheduler;
   private post: (m: FromWorker) => void;
   private hardCap: number | undefined;
+  private lastMoteKey = '';
 
   constructor(post: (m: FromWorker) => void, opts?: { scheduler?: Scheduler; hardCap?: number }) {
     this.post = post;
@@ -76,6 +77,7 @@ export class WorkerRuntime {
     this.world = World.fromJSON(worldJson);
     this.mote = Mote.fromJSON(moteJson);
     this.world.takeDirty();
+    this.lastMoteKey = `${this.mote.x},${this.mote.y},${this.mote.h},${this.mote.facing}`;
     this.post({ type: 'ready', version: PROTOCOL_VERSION });
   }
 
@@ -196,7 +198,19 @@ export class WorkerRuntime {
   private flushSideEffects(): void {
     if (this.world) {
       const cells = this.world.takeDirty();
-      if (cells.length > 0) this.post({ type: 'tick', cells });
+      const mote = this.mote;
+      // ponytail: mote position rides along on tick so the renderer can follow it
+      // without a second round trip; movement alone still produces a tick.
+      const key = mote ? `${mote.x},${mote.y},${mote.h},${mote.facing}` : '';
+      const moved = key !== this.lastMoteKey;
+      if (moved) this.lastMoteKey = key;
+      if (cells.length > 0 || (moved && mote)) {
+        this.post({
+          type: 'tick',
+          cells,
+          mote: mote ? { x: mote.x, y: mote.y, h: mote.h, facing: mote.facing } : { x: 0, y: 0, h: 0, facing: 'north' },
+        });
+      }
     }
     if (this.mote && this.mote.pending.length > 0) {
       const events = this.mote.pending.splice(0, this.mote.pending.length);
