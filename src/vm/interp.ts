@@ -130,6 +130,7 @@ function cmp(op: string, l: unknown, r: unknown, line: number): boolean {
 export class Interp {
   readonly reports: string[];
   ops = 0;
+  lastLine = 0;
   private root: Generator<void, void, void> | null = null;
   private hardCap: number;
   private env = new Map<string, unknown>();
@@ -210,6 +211,7 @@ export class Interp {
 
   private *execStmt(stmt: Stmt): Generator<void, void, void> {
     this.ops++;
+    this.lastLine = stmt.line;
     // ponytail: one yield per statement is the suspension point; step() regains
     // control here and enforces the slice budget + hard cap.
     yield;
