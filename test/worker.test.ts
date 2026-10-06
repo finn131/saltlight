@@ -74,8 +74,6 @@ function initAndRun(rt, source) {
   rt.handle({ type: 'run', source, programId: 'p1' });
 }
 
-// --- acceptance 1: op cap aborts the run -------------------------------------------------
-
 test('acceptance 1: while True aborts with op_cap', () => {
   const { rt, msgs } = createRuntime(10000);
   initAndRun(rt, 'while True:\n    pass\n');
@@ -85,8 +83,6 @@ test('acceptance 1: while True aborts with op_cap', () => {
   assert.equal(abort.reason, 'op_cap');
   assert.ok(abort.ops > 10000, 'ops exceeds cap');
 });
-
-// --- acceptance 2: pause clears the timer ------------------------------------------------
 
 test('acceptance 2: pause clears the scheduled timer', () => {
   const { rt, msgs, clock } = createRuntime();
@@ -102,8 +98,6 @@ test('acceptance 2: pause clears the scheduled timer', () => {
   assert.equal(msgs.length, before + 1, 'no activity after pause');
 });
 
-// --- acceptance 3: step returns line and locals ---------------------------------------------
-
 test('acceptance 3: step returns line and locals', () => {
   const { rt, msgs } = createRuntime();
   initAndRun(rt, 'x = 1\ny = 2\nz = x + y\n');
@@ -114,8 +108,6 @@ test('acceptance 3: step returns line and locals', () => {
   assert.ok(stepped.line >= 1, 'line points at an executed statement');
   assert.equal(stepped.locals['z'], 3, 'locals snapshot reflects executed statements');
 });
-
-// --- acceptance 4: setSpeed changes tick rate over 100 ticks -------------------------------
 
 test('acceptance 4: setSpeed changes tick rate over 100 ticks', () => {
   const speeds = [0.25, 0.5, 1, 2, 4, 8];
@@ -139,8 +131,6 @@ test('acceptance 4: setSpeed changes tick rate over 100 ticks', () => {
   assert.ok(perSpeed.get(8) < perSpeed.get(1), '8x faster than 1x');
 });
 
-// --- acceptance 5: wait() alone produces zero CellDelta ------------------------------------
-
 test('acceptance 5: wait() only produces zero CellDelta', () => {
   const { rt, msgs } = createRuntime();
   initAndRun(rt, 'wait()\nwait()\nwait()\n');
@@ -148,8 +138,6 @@ test('acceptance 5: wait() only produces zero CellDelta', () => {
   const nonEmpty = msgs.filter((m) => m.type === 'tick' && m.cells && m.cells.length > 0);
   assert.equal(nonEmpty.length, 0, 'wait() alone must not produce cell deltas');
 });
-
-// --- acceptance 6: syntax error is reported, no run starts ---------------------------------
 
 test('acceptance 6: syntax error reports line, col, phase parse and does not start', () => {
   const { rt, msgs } = createRuntime();
@@ -163,8 +151,6 @@ test('acceptance 6: syntax error reports line, col, phase parse and does not sta
   assert.equal(err.phase, 'parse');
   assert.equal(msgs.find((m) => m.type === 'started'), undefined, 'no run started');
 });
-
-// --- acceptance 7: source lives on the main thread ------------------------------------------
 
 function makeFakeWorker() {
   const messages = [];
@@ -196,8 +182,6 @@ test('acceptance 7: WorkerClient keeps source across a worker restart', () => {
   assert.equal(workers[0].terminated, true, 'old worker terminated');
   assert.equal(client.getSource(), source, 'source survives restart');
 });
-
-// --- protocol basics -------------------------------------------------------------------------
 
 test('ready message includes the protocol version', () => {
   const { rt, msgs } = createRuntime();
@@ -241,12 +225,11 @@ test('event: harvest posts an event message', () => {
   assert.ok(msgs.some((m) => m.type === 'console' && m.lines.includes('2')), 'report reached the console');
 });
 
-// --- tick carries the mote position (Phase 4 render sync) ------------------------------------
-
 test('tick carries the mote position', () => {
   const { rt, msgs } = createRuntime();
-  initAndRun(rt, 'pass\n');
-  rt.handle({ type: 'step', slices: 2 });
+  // till() changes a cell, so a tick is guaranteed; the tick must also carry the mote.
+  initAndRun(rt, 'till()\n');
+  rt.handle({ type: 'step', slices: 5 });
   const ticks = msgs.filter((m) => m.type === 'tick');
   assert.ok(ticks.length > 0, 'at least one tick posted');
   const last = ticks[ticks.length - 1];
@@ -265,8 +248,6 @@ test('tick reports the mote after move()', () => {
   const ticks = msgs.filter((m) => m.type === 'tick');
   assert.ok(ticks.some((t) => t.mote.y === 1), 'mote moved south from (0,0)');
 });
-
-// --- rule dispatch ------------------------------------------------------------------------------
 
 test('rule: worker dispatch handles rules without throwing', () => {
   const { rt, msgs } = createRuntime();
@@ -289,8 +270,6 @@ test('rule: worker dispatch handles rules without throwing', () => {
   rt.handle({ type: 'step', slices: 200 });
   assert.equal(msgs.filter((m) => m.type === 'error').length, 0, 'no errors during rule dispatch');
 });
-
-// --- step boundary --------------------------------------------------------------------------------
 
 test('step advances exactly one slice and posts one stepped message', () => {
   const { rt, msgs } = createRuntime();
