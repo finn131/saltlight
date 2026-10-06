@@ -80,3 +80,4 @@ export class WorkerClient {
   terminate(): void {
     this.worker.terminate();
   }
+}
