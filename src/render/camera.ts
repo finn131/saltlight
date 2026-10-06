@@ -19,11 +19,23 @@ export function clampZoom(c: Camera, z: number): number {
   return Math.min(c.maxZoom, Math.max(c.minZoom, z));
 }
 
-export function clampPan(c: Camera): void {
-  const halfW = (c.worldW * TILE_W) / 2;
-  const halfH = (c.worldH * TILE_H) / 2;
-  const maxX = halfW * c.zoom - TILE_W;
-  const maxY = halfH * c.zoom - TILE_H;
+// The diamond is symmetric about sx=0 but spans 0..extent in sy, so the world
+// centre sits at sy = extent/2, not 0. Pan bounds derive from that offset.
+// ponytail: bounds keep one tile of the world on screen; overscroll past the
+// edge is intentional so the island rim is reachable.
+export function worldExtents(c: Camera): { extentX: number; extentY: number } {
+  return {
+    extentX: (Math.max(c.worldW, c.worldH) - 1) * TILE_W,
+    extentY: (c.worldW + c.worldH - 2) * (TILE_H / 2),
+  };
+}
+
+export function clampPan(c: Camera, canvasW: number, canvasH: number): void {
+  const { extentX, extentY } = worldExtents(c);
+  const halfW = (extentX * c.zoom) / 2;
+  const halfH = (extentY * c.zoom) / 2;
+  const maxX = Math.max(0, halfW + canvasW / 2 - TILE_W);
+  const maxY = Math.max(0, halfH + canvasH / 2 - TILE_H);
   c.x = Math.min(maxX, Math.max(-maxX, c.x));
   c.y = Math.min(maxY, Math.max(-maxY, c.y));
 }
@@ -35,22 +47,23 @@ export interface Viewport {
 }
 
 export function viewport(c: Camera, canvasW: number, canvasH: number): Viewport {
+  const { extentY } = worldExtents(c);
   return {
     originX: canvasW / 2 + c.x,
-    originY: canvasH / 4 + c.y,
+    originY: canvasH / 2 - (extentY * c.zoom) / 2 + c.y,
     zoom: c.zoom,
   };
 }
 
 export function screenBounds(v: Viewport, canvasW: number, canvasH: number) {
-  const hw = TILE_W / 2 * v.zoom;
-  const hh = TILE_H / 2 * v.zoom;
+  const hw = (TILE_W / 2) * v.zoom;
+  const hh = (TILE_H / 2) * v.zoom;
   const z = TILE_Z * v.zoom;
   return {
-    left: v.originX - hw,
-    top: v.originY - hh - z * 10,
-    right: v.originX + canvasW + hw,
-    bottom: v.originY + canvasH + hh + z * 10,
+    left: v.originX - hw - z,
+    top: v.originY - hh - z,
+    right: v.originX + canvasW + hw + z,
+    bottom: v.originY + canvasH + hh + z,
   };
 }
 
