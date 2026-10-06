@@ -27,8 +27,32 @@ export const BUILTINS: BuiltinDef[] = [
 
 export interface BuiltinContext {
   reports: string[];
-  mote: unknown;
-  world: unknown;
+  mote: unknown | null;
+  world: unknown | null;
+}
+
+interface WorldLike {
+  till(mote: unknown): boolean;
+  plant(mote: unknown, crop: string): string;
+  harvest(mote: unknown): number;
+  water(mote: unknown): boolean;
+  tick(mote: unknown): void;
+}
+
+interface MoteLike {
+  x: number;
+  y: number;
+  h: number;
+  facing: string;
+  inventory: Record<string, number>;
+  inventoryCopy(): Record<string, number>;
+  position(): { x: number; y: number; h: number; facing: string };
+  move(world: unknown, dir: string): boolean;
+  sense(world: unknown, dir: string): string;
+  ascend(world: unknown): boolean;
+  descend(world: unknown): boolean;
+  setRule(event: string, fn: (...args: unknown[]) => unknown): void;
+  clearRule(event: string): void;
 }
 
 function stringify(v: unknown): string {
@@ -65,6 +89,8 @@ function wrapArity(def: BuiltinDef, fn: (...args: unknown[]) => unknown): (...ar
 
 export function makeBuiltins(ctx: BuiltinContext): Record<string, (...args: unknown[]) => unknown> {
   const out: Record<string, (...args: unknown[]) => unknown> = {};
+  const world = ctx.world as WorldLike | null;
+  const mote = ctx.mote as MoteLike | null;
 
   for (const def of BUILTINS) {
     if (def.name === 'report') {
@@ -74,9 +100,31 @@ export function makeBuiltins(ctx: BuiltinContext): Record<string, (...args: unkn
         if (ctx.reports.length > 200) ctx.reports.shift();
       };
       out[def.name] = wrapArity(def, reportFn);
-    } else {
-      out[def.name] = wrapArity(def, makeNotAvailable(def.name));
+      continue;
     }
+
+    const live = (): { w: WorldLike; m: MoteLike } => {
+      if (!world || !mote) throw new Error(`${def.name} is not available outside a world`);
+      return { w: world, m: mote };
+    };
+
+    const impl: (...args: unknown[]) => unknown =
+      def.name === 'move' ? (dir) => live().m.move(world, String(dir))
+      : def.name === 'sense' ? (dir) => live().m.sense(world, String(dir))
+      : def.name === 'ascend' ? () => live().m.ascend(world)
+      : def.name === 'descend' ? () => live().m.descend(world)
+      : def.name === 'till' ? () => live().w.till(mote)
+      : def.name === 'plant' ? (crop) => live().w.plant(mote, String(crop))
+      : def.name === 'harvest' ? () => live().w.harvest(mote)
+      : def.name === 'water' ? () => live().w.water(mote)
+      : def.name === 'wait' ? () => { live().w.tick(mote); return null; }
+      : def.name === 'position' ? () => live().m.position()
+      : def.name === 'inventory' ? () => live().m.inventoryCopy()
+      : def.name === 'set_rule' ? (ev, fn) => { live().m.setRule(String(ev), fn as (...a: unknown[]) => unknown); return null; }
+      : def.name === 'clear_rule' ? (ev) => { live().m.clearRule(String(ev)); return null; }
+      : makeNotAvailable(def.name);
+
+    out[def.name] = wrapArity(def, impl);
   }
   return out;
 }
