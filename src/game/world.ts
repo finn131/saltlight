@@ -11,6 +11,16 @@ export interface Cell {
   moisture: number;
 }
 
+export interface CellDelta {
+  x: number;
+  y: number;
+  h: number;
+  terrain?: TerrainId;
+  plant?: CropId | null;
+  growth?: number;
+  moisture?: number;
+}
+
 export interface WorldRuleSlots {
   claimWater?: (cell: Cell) => boolean;
 }
@@ -40,6 +50,7 @@ export class World {
   readonly rules: WorldRuleSlots;
   allowVertical: boolean;
   private store = new Map<string, Cell>();
+  private dirty = new Map<string, CellDelta>();
 
   constructor(opts: { width: number; height: number; credits?: number }) {
     this.width = opts.width;
@@ -73,10 +84,35 @@ export class World {
 
   set(cell: Cell): void {
     this.store.set(this.key(cell.x, cell.y, cell.h), cell);
+    this.markDirty(cell);
+  }
+
+  private markDirty(cell: Cell): void {
+    const k = this.key(cell.x, cell.y, cell.h);
+    this.dirty.set(k, {
+      x: cell.x,
+      y: cell.y,
+      h: cell.h,
+      terrain: cell.terrain,
+      plant: cell.plant,
+      growth: cell.growth,
+      moisture: cell.moisture,
+    });
+  }
+
+  takeDirty(): CellDelta[] {
+    const out = [...this.dirty.values()];
+    this.dirty.clear();
+    return out;
   }
 
   *cells(): Iterable<Cell> {
     yield* this.store.values();
+  }
+
+  /** All cells for debug/serialization. */
+  getAllCells(): Cell[] {
+    return [...this.store.values()];
   }
 
   terrainAt(x: number, y: number, h: number): string {
@@ -89,6 +125,7 @@ export class World {
     if (!cell) return false;
     if (TERRAIN[cell.terrain].tillable || this.rules.claimWater?.(cell)) {
       cell.terrain = 'soil';
+      this.markDirty(cell);
       return true;
     }
     return false;
@@ -106,6 +143,7 @@ export class World {
     this.credits -= crop.seedCost;
     cell.plant = crop.id;
     cell.growth = 0;
+    this.markDirty(cell);
     mote.enqueue('plant', { crop: crop.id, x: cell.x, y: cell.y, h: cell.h });
     return crop.id;
   }
@@ -120,6 +158,7 @@ export class World {
     this.credits += crop.yieldAmount;
     cell.plant = null;
     cell.growth = 0;
+    this.markDirty(cell);
     mote.enqueue('harvest', { amount: crop.yieldAmount, crop: crop.id, x: cell.x, y: cell.y, h: cell.h });
     return crop.yieldAmount;
   }
@@ -129,11 +168,22 @@ export class World {
     if (!cell || cell.plant === null) return false;
     const crop = CROPS[cell.plant];
     cell.moisture = Math.min(cell.moisture + 1, crop.waterNeed);
+    this.markDirty(cell);
     return true;
   }
 
   tick(mote: MoteLike): void {
+    const before = new Map<string, { g: number; m: number }>();
+    for (const c of this.store.values()) {
+      if (c.plant !== null) before.set(this.key(c.x, c.y, c.h), { g: c.growth, m: c.moisture });
+    }
     growthTick(this.store.values());
+    for (const c of this.store.values()) {
+      if (c.plant === null) continue;
+      const k = this.key(c.x, c.y, c.h);
+      const prev = before.get(k);
+      if (prev && (prev.g !== c.growth || prev.m !== c.moisture)) this.markDirty(c);
+    }
     mote.tickCount++;
     mote.enqueue('tick', { x: mote.x, y: mote.y, h: mote.h, ticks: mote.tickCount });
   }
@@ -152,6 +202,7 @@ export class World {
     const w = new World({ width: j.width, height: j.height, credits: j.credits });
     w.tech = new Set(j.tech);
     w.store.clear();
+    w.dirty.clear();
     for (const c of j.cells) w.store.set(w.key(c.x, c.y, c.h), { ...c });
     return w;
   }

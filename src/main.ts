@@ -1,51 +1,22 @@
 import './style.css';
+import { World } from './game/world';
+import { Mote } from './game/drone';
+import { WorkerClient } from './workerClient';
+import { bakeSprites, type SpriteAtlas } from './render/sprites';
+import { project, drawOrder, TILE_W, TILE_H, TILE_Z } from './render/iso';
+import { createCamera, clampZoom, clampPan, viewport, cullCells } from './render/camera';
 
-const TILE_W = 64;
-const TILE_H = 32;
-const TILE_Z = 16;
 const GRID = 20;
 
-// ponytail: inline camera seed; real camera.ts arrives in Phase 4
-const camera = { x: 0, y: 0, zoom: 1 };
+const world = new World({ width: GRID, height: GRID });
+const mote = new Mote();
+const atlas: SpriteAtlas = bakeSprites();
+const camera = createCamera(GRID, GRID);
 
-// ponytail: seed of project() from ARCHITECTURE §7; src/render/iso.ts arrives in Phase 4
-function project(x: number, y: number, h: number): { sx: number; sy: number } {
-  return {
-    sx: (x - y) * (TILE_W / 2),
-    sy: (x + y) * (TILE_H / 2) - h * TILE_Z,
-  };
-}
-
-const heights: number[] = new Array(GRID * GRID).fill(0);
-for (let i = 0; i < GRID; i++) {
-  heights[i] = 1;
-  heights[(GRID - 1) * GRID + i] = 1;
-  heights[i * GRID] = 1;
-  heights[i * GRID + GRID - 1] = 1;
-}
-heights[5 * GRID + 5] = 2;
-heights[12 * GRID + 12] = 2;
-
-const mount = document.getElementById('grid-canvas');
-if (!(mount instanceof HTMLCanvasElement)) {
-  throw new Error('#grid-canvas missing');
-}
-const canvas: HTMLCanvasElement = mount;
-const maybeCtx: CanvasRenderingContext2D | null = canvas.getContext('2d');
-if (!maybeCtx) {
-  throw new Error('2d context unavailable on #grid-canvas');
-}
-const ctx: CanvasRenderingContext2D = maybeCtx;
-
-const css = getComputedStyle(document.documentElement);
-function paletteVar(name: string, fallback: string): string {
-  const v = css.getPropertyValue(name).trim();
-  return v || fallback;
-}
-const colSoil = paletteVar('--soil', '#5b4636');
-const colSoilTilled = paletteVar('--soil-tilled', '#3f3125');
-const colRockTop = paletteVar('--rock-top', '#7b8087');
-const colBorder = paletteVar('--ui-border', '#3b4650');
+const canvasEl = document.getElementById('grid-canvas');
+if (!(canvasEl instanceof HTMLCanvasElement)) throw new Error('#grid-canvas missing');
+const canvas: HTMLCanvasElement = canvasEl;
+const ctx: CanvasRenderingContext2D = canvas.getContext('2d')!;
 
 function resize(): void {
   const dpr = window.devicePixelRatio || 1;
@@ -55,41 +26,42 @@ function resize(): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function fillFor(h: number): string {
-  if (h >= 2) return colRockTop;
-  if (h >= 1) return colSoilTilled;
-  return colSoil;
-}
+const ANCHOR_X = TILE_W / 2;
+const ANCHOR_Y = TILE_H / 2;
 
-// ponytail: throwaway path draw for Phase 0; Phase 4 replaces paths with baked sprite drawImage
-function drawGrid(): void {
+// ponytail: render loop is blits only; all path work happens in bakeSprites
+function draw(): void {
   const rect = canvas.getBoundingClientRect();
-  const originX = rect.width / 2 + camera.x;
-  const originY = rect.height / 4 + camera.y;
-  ctx.clearRect(0, 0, rect.width, rect.height);
+  const w = rect.width;
+  const h = rect.height;
+  ctx.clearRect(0, 0, w, h);
 
-  for (let sum = 0; sum <= 2 * (GRID - 1); sum++) {
-    for (let x = 0; x < GRID; x++) {
-      const y = sum - x;
-      if (y < 0 || y >= GRID) continue;
-      const h = heights[y * GRID + x];
-      const { sx, sy } = project(x, y, h);
-      const px = originX + sx * camera.zoom;
-      const py = originY + sy * camera.zoom;
-      const hw = (TILE_W / 2) * camera.zoom;
-      const hh = (TILE_H / 2) * camera.zoom;
+  const ox = w / 2 + camera.x;
+  const oy = h / 4 + camera.y;
+  const z = camera.zoom;
 
-      ctx.beginPath();
-      ctx.moveTo(px, py - hh);
-      ctx.lineTo(px + hw, py);
-      ctx.lineTo(px, py + hh);
-      ctx.lineTo(px - hw, py);
-      ctx.closePath();
-      ctx.fillStyle = fillFor(h);
-      ctx.fill();
-      ctx.strokeStyle = colBorder;
-      ctx.stroke();
+  const vp = viewport(camera, w, h);
+  const visible = cullCells(world.getAllCells(), vp, w, h).sort(drawOrder);
+  for (const cell of visible) {
+    const { sx, sy } = project(cell.x, cell.y, cell.h);
+    const px = ox + sx * z - ANCHOR_X * z;
+    const py = oy + sy * z - ANCHOR_Y * z;
+    const terrain = atlas[cell.terrain];
+    if (terrain) {
+      ctx.drawImage(terrain, px, py - TILE_Z * z, TILE_W * z, (TILE_H + TILE_Z * 2) * z);
     }
+    if (cell.plant !== null) {
+      const crop = atlas[cell.plant + '_' + cell.growth] ?? atlas[cell.plant + '_0'];
+      if (crop) {
+        ctx.drawImage(crop, px, py - TILE_H * z, TILE_W * z, TILE_H * 2 * z);
+      }
+    }
+  }
+
+  const mp = project(mote.x, mote.y, mote.h);
+  const moteTile = atlas['soil'];
+  if (moteTile) {
+    ctx.drawImage(moteTile, ox + mp.sx * z - ANCHOR_X * z, oy + mp.sy * z - ANCHOR_Y * z, TILE_W * z, (TILE_H + TILE_Z * 2) * z);
   }
 }
 
@@ -107,6 +79,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (!dragging) return;
   camera.x += e.clientX - lastX;
   camera.y += e.clientY - lastY;
+  clampPan(camera);
   lastX = e.clientX;
   lastY = e.clientY;
 });
@@ -114,19 +87,42 @@ canvas.addEventListener('pointerup', (e) => {
   dragging = false;
   canvas.releasePointerCapture(e.pointerId);
 });
-
-window.addEventListener('keydown', (e) => {
-  const step = 40;
-  if (e.key === 'ArrowLeft') camera.x += step;
-  else if (e.key === 'ArrowRight') camera.x -= step;
-  else if (e.key === 'ArrowUp') camera.y += step;
-  else if (e.key === 'ArrowDown') camera.y -= step;
-  else return;
+canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
+  camera.zoom = clampZoom(camera, camera.zoom * (e.deltaY < 0 ? 1.1 : 0.9));
+  clampPan(camera);
+}, { passive: false });
+
+const eventLog: string[] = [];
+const client = new WorkerClient({
+  tick: (cells) => {
+    for (const c of cells) {
+      const cell = world.get(c.x, c.y, c.h);
+      if (!cell) continue;
+      if (c.terrain !== undefined) cell.terrain = c.terrain;
+      if (c.plant !== undefined) cell.plant = c.plant;
+      if (c.growth !== undefined) cell.growth = c.growth;
+      if (c.moisture !== undefined) cell.moisture = c.moisture;
+    }
+  },
+  event: (kind, x, y, h, data) => {
+    eventLog.push(`${kind} @(${x},${y},${h}) ${JSON.stringify(data)}`);
+  },
+  console: (lines) => {
+    for (const l of lines) eventLog.push(`> ${l}`);
+  },
+  error: (e) => {
+    eventLog.push(`ERROR ${e.phase} line ${e.line} col ${e.col}: ${e.message}`);
+  },
+  aborted: (a) => {
+    eventLog.push(`ABORTED ${a.reason} after ${a.ops} ops`);
+  },
 });
 
+client.init(world.toJSON(), mote.toJSON());
+
 function frame(): void {
-  drawGrid();
+  draw();
   requestAnimationFrame(frame);
 }
 
