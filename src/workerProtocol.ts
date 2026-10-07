@@ -47,6 +47,7 @@ export class WorkerRuntime {
   private post: (m: FromWorker) => void;
   private hardCap: number | undefined;
   private lastMoteKey = '';
+  private programDone = false;
 
   constructor(post: (m: FromWorker) => void, opts?: { scheduler?: Scheduler; hardCap?: number }) {
     this.post = post;
@@ -97,6 +98,7 @@ export class WorkerRuntime {
     }
 
     this.interp = new Interp(stmts, { hardCap: this.hardCap, world: this.world, mote: this.mote });
+    this.programDone = false;
     this.paused = false;
     this.post({ type: 'started', programId });
     this.scheduleNext();
@@ -162,8 +164,15 @@ export class WorkerRuntime {
   private onTimer(): void {
     this.timerId = null;
     if (this.paused) return;
-    this.runSlice();
-    this.flushSideEffects();
+    // A rule-driven program finishes its top-level body and then keeps the farm
+    // alive: once the program is done but rules are bound, drive the world tick
+    // instead of stepping a finished interpreter.
+    if (this.interp && !this.programDone) {
+      this.runSlice();
+    } else if (this.world && this.mote && this.mote.rules.size > 0) {
+      this.world.tick(this.mote);
+      this.flushSideEffects();
+    }
     if (!this.paused) this.scheduleNext();
   }
 
@@ -171,6 +180,7 @@ export class WorkerRuntime {
     if (!this.interp) return false;
     try {
       const r = this.interp.step();
+      if (r === 'done') this.programDone = true;
       return r === 'slice';
     } catch (e) {
       this.handleError(e);
@@ -199,8 +209,6 @@ export class WorkerRuntime {
     if (this.world) {
       const cells = this.world.takeDirty();
       const mote = this.mote;
-      // ponytail: mote position rides along on tick so the renderer can follow it
-      // without a second round trip; movement alone still produces a tick.
       const key = mote ? `${mote.x},${mote.y},${mote.h},${mote.facing}` : '';
       const moved = key !== this.lastMoteKey;
       if (moved) this.lastMoteKey = key;
