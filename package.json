@@ -9,6 +9,11 @@
     "preview": "vite preview",
     "test": "node --test"
   },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.1",
+    "@codemirror/language": "^6.11.4",
+    "codemirror": "^6.0.2"
+  },
   "devDependencies": {
     "typescript": "^5.9.3",
     "vite": "^7.1.7"
