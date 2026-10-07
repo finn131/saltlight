@@ -202,16 +202,19 @@ export function runTask(source: string, opts: RunOptions = {}): TaskTrace {
 
   // Count events pending before this dispatch, only for kinds with a bound rule.
   const dispatchRound = (): void => {
-    for (const ev of mote.pending) {
+    const batch = mote.pending.splice(0, mote.pending.length);
+    for (const ev of batch) {
       if (mote.rules.has(ev.kind)) ruleFires[ev.kind] = (ruleFires[ev.kind] ?? 0) + 1;
       events.push(ev.kind);
     }
-    try {
-      mote.dispatch((fn, ctx) => interp.callRule(fn, ctx));
-    } catch (e) {
-      if (e instanceof OpCapError) aborted = true;
+    if (batch.length > 0) {
+      try {
+        mote.dispatch((fn, ctx) => interp.callRule(fn, ctx), batch);
+      } catch (e) {
+        if (e instanceof OpCapError) aborted = true;
+      }
+      for (const ev of mote.pending.splice(0, mote.pending.length)) events.push(ev.kind);
     }
-    for (const ev of mote.pending) events.push(ev.kind);
   };
 
   try {
@@ -284,6 +287,11 @@ function getBaselineOps(): number {
   return baselineOps;
 }
 
+function reportsNonZeroNumber(t: TaskTrace): boolean {
+  // A report counts as "the tally matched" if it emitted a positive integer.
+  return t.reports.some((r) => /\b[1-9]\d*\b/.test(r));
+}
+
 export const TASKS: TaskDef[] = [
   {
     id: 1,
@@ -299,10 +307,12 @@ export const TASKS: TaskDef[] = [
     id: 2,
     name: 'Look before you leap',
     concept: 'sense and if',
-    hint: "Read a direction with sense(), then branch with if.",
-    starter: "d = sense('forward')\nif d == 'soil':\n    report('soil ahead')\n",
+    hint: 'Read a direction with sense(), then branch with if.',
+    // The Mote starts at the south-west corner facing north, so 'back' is the
+    // only in-grid direction; the starter has to work from there.
+    starter: "d = sense('back')\nif d == 'soil':\n    report('soil behind')\n",
     check: (t) => t.features.hasSense && t.features.hasIf && t.reports.length > 0,
-    referencePass: "d = sense('back')\nif d == 'soil':\n    report('ok')\n",
+    referencePass: "d = sense('back')\nif d == 'soil':\n    report('soil behind')\n",
     referenceFail: "report('no sensing')\n",
   },
   {
@@ -310,9 +320,9 @@ export const TASKS: TaskDef[] = [
     name: 'Do not stop',
     concept: 'while',
     hint: 'A while loop can move the Mote many times.',
-    starter: 'n = 0\nwhile n < 12:\n    move("back")\n    n += 1\n',
+    starter: 'n = 0\nwhile n < 8:\n    move("back")\n    move("forward")\n    n += 1\n',
     check: (t) => t.features.hasWhile && t.moves >= 10,
-    referencePass: 'n = 0\nwhile n < 12:\n    move("back")\n    move("forward")\n    n += 1\n',
+    referencePass: 'n = 0\nwhile n < 8:\n    move("back")\n    move("forward")\n    n += 1\n',
     referenceFail: "move('back')\nmove('forward')\n",
   },
   {
@@ -320,9 +330,11 @@ export const TASKS: TaskDef[] = [
     name: 'Count your steps',
     concept: 'loop counters and budget',
     hint: 'Make the loop end on a counter, not run forever.',
-    starter: 'n = 0\nwhile n < 20:\n    move("back")\n    n += 1\n',
-    check: (t) => t.features.hasWhile && !t.aborted,
-    referencePass: 'n = 0\nwhile n < 20:\n    move("back")\n    n += 1\n',
+    starter: 'n = 0\nwhile n < 12:\n    move("back")\n    move("forward")\n    n += 1\n',
+    // The loop has to have actually run and terminated on its own: a body that
+    // never executes would also leave aborted false.
+    check: (t) => t.features.hasWhile && !t.aborted && t.moves >= 10,
+    referencePass: 'n = 0\nwhile n < 12:\n    move("back")\n    move("forward")\n    n += 1\n',
     referenceFail: 'while True:\n    pass\n',
   },
   {
@@ -331,7 +343,7 @@ export const TASKS: TaskDef[] = [
     concept: 'for over range',
     hint: 'for i in range(0, n) runs the body exactly n times.',
     starter: 'total = 0\nfor i in range(0, 5):\n    total += 1\nreport(total)\n',
-    check: (t) => t.features.hasFor && !t.aborted && t.reports.length > 0,
+    check: (t) => t.features.hasFor && !t.aborted && reportsNonZeroNumber(t),
     referencePass: 'total = 0\nfor i in range(0, 5):\n    total += 1\nreport(total)\n',
     referenceFail: "report('no loop')\n",
   },
@@ -351,7 +363,8 @@ export const TASKS: TaskDef[] = [
     concept: 'composition',
     hint: 'A function with a loop can call another function that also loops.',
     starter: 'def one():\n    return 1\ndef many():\n    total = 0\n    for i in range(0, 3):\n        total += one()\n    return total\nmany()\n',
-    check: (t) => t.features.defCallsFunctionInsideLoop && !t.aborted,
+    // The composed function has to have actually run, not merely be defined.
+    check: (t) => t.features.defCallsFunctionInsideLoop && !t.aborted && t.userCalls >= 2,
     referencePass: 'def one():\n    return 1\ndef many():\n    total = 0\n    for i in range(0, 3):\n        total += one()\n    return total\nmany()\n',
     referenceFail: 'def many():\n    total = 0\n    for i in range(0, 3):\n        total += 1\n    return total\nmany()\n',
   },
@@ -361,7 +374,7 @@ export const TASKS: TaskDef[] = [
     concept: 'dicts and inventory()',
     hint: 'inventory() returns a dict; branch on a key before planting.',
     starter: "inv = inventory()\nif inv == {}:\n    report('empty bag')\n",
-    check: (t) => t.features.hasInventory && t.features.hasIf && !t.aborted,
+    check: (t) => t.features.hasInventory && t.features.hasIf && t.reports.length > 0,
     referencePass: "inv = inventory()\nif inv == {}:\n    report('empty bag')\n",
     referenceFail: "report('no inventory')\n",
   },
@@ -381,7 +394,7 @@ export const TASKS: TaskDef[] = [
     concept: 'optimisation',
     hint: 'Finish a farm cycle in at least 40% fewer operations.',
     starter: OPTIMIZED_FARM,
-    check: (t) => t.opsUsed > 0 && t.opsUsed <= getBaselineOps() * 0.6,
+    check: (t) => t.harvested > 0 && t.opsUsed <= getBaselineOps() * 0.6,
     referencePass: OPTIMIZED_FARM,
     referenceFail: NAIVE_FARM,
   },
