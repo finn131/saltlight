@@ -41,10 +41,25 @@ function tx<T>(store: string, mode: IDBTransactionMode, run: (s: IDBObjectStore)
     (db) =>
       new Promise<T>((resolve, reject) => {
         const t = db.transaction(store, mode);
+        let result: T;
         const req = run(t.objectStore(store));
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-        t.oncomplete = () => db.close();
+        req.onsuccess = () => {
+          result = req.result;
+        };
+        // Resolve only once the transaction commits, so a caller that sees a
+        // resolved write knows it is durable.
+        t.oncomplete = () => {
+          db.close();
+          resolve(result);
+        };
+        t.onerror = () => {
+          db.close();
+          reject(t.error);
+        };
+        t.onabort = () => {
+          db.close();
+          reject(t.error);
+        };
       })
   );
 }
