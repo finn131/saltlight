@@ -1,7 +1,7 @@
 import './style.css';
 import { Mote, type MoteJSON } from './game/drone';
 import { World, type WorldJSON } from './game/world';
-import { generateChapter1 } from './game/chapter';
+import { generateChapter1, generateChapter2 } from './game/chapter';
 import { TASKS, evaluateTask } from './game/tasks';
 import { UPGRADES, unlockedLevel, totalHarvested } from './game/upgrades';
 import { WorkerClient } from './workerClient';
@@ -83,26 +83,70 @@ const consoleEl = document.createElement('div');
 consoleEl.className = 'console';
 
 const eventLog: string[] = [];
+// ponytail: coalesce writes; the keep-alive can emit hundreds of ticks a second
+// and rewriting the whole node each time is the one real cost in the panel.
+let consoleDirty = false;
+let lastConsolePaint = 0;
 function logLine(s: string): void {
   eventLog.push(s);
   if (eventLog.length > 200) eventLog.shift();
+  consoleDirty = true;
+}
+function paintConsole(now: number): void {
+  if (!consoleDirty || now - lastConsolePaint < 100) return;
+  consoleDirty = false;
+  lastConsolePaint = now;
   consoleEl.textContent = eventLog.join('\n');
   consoleEl.scrollTop = consoleEl.scrollHeight;
 }
 
 let taskIndex = 0;
 let freePlay = false;
+let chapter: 1 | 2 = 1;
+
+function enterChapter2(opts: { silent?: boolean; taskIndex?: number } = {}): void {
+  // Chapter 2 is gated on finishing the tutorial, and the world is rebuilt with
+  // fog and current wired in from the rule modules.
+  const ch = generateChapter2({
+    seed: 2,
+    fogRadius: 3,
+    currentStrength: 1,
+    upgrades: world.upgrades,
+    tech: [...world.tech],
+  });
+  world = ch.world;
+  mote = ch.mote;
+  chapter = 2;
+  taskIndex = opts.taskIndex ?? TASKS.length;
+  freePlay = true;
+  if (!opts.silent) {
+    eventLog.length = 0;
+    logLine('entered the trench');
+    editor.setSource("d = sense('back')\nreport(d)\n");
+  }
+  client.init(world.toJSON(), mote.toJSON());
+  autosaveProgram();
+  renderPanels();
+}
 
 const taskPanel = new TaskPanel();
 const resourcePanel = new ResourcePanel();
 let settingsPanel: SettingsPanel;
+
+const chapterBtn = document.createElement('button');
+chapterBtn.textContent = 'Descend';
+chapterBtn.className = 'btn';
+chapterBtn.style.display = 'none';
+chapterBtn.addEventListener('click', () => enterChapter2());
 
 function currentTask() {
   return TASKS[taskIndex];
 }
 
 function renderPanels(): void {
-  if (!freePlay && currentTask()) {
+  if (chapter === 2) {
+    taskPanel.render({ index: TASKS.length, name: 'Deep Trench', concept: 'nothing here is what it seems', hint: 'Fog hides the grid past your sensing radius. Survey before you farm.', total: TASKS.length });
+  } else if (!freePlay && currentTask()) {
     const t = currentTask();
     taskPanel.render({ index: taskIndex, name: t.name, concept: t.concept, hint: t.hint, total: TASKS.length });
   } else {
@@ -113,9 +157,10 @@ function renderPanels(): void {
     credits: world.credits,
     harvested,
     upgrades: Object.values(UPGRADES)
-      .filter((u) => u.chapter === 1)
+      .filter((u) => u.chapter === chapter)
       .map((u) => ({ name: u.name, level: world.upgrades[u.id] ?? 0, maxLevel: unlockedLevel(u, harvested) })),
   });
+  chapterBtn.style.display = freePlay && chapter === 1 ? '' : 'none';
 }
 
 function checkTask(): void {
@@ -125,13 +170,14 @@ function checkTask(): void {
   if (!passed) return;
   logLine(`task ${currentTask().id} complete: ${currentTask().name}`);
   world.credits += 5;
-  if (taskIndex >= TASKS.length - 1) {
+  // Advance the index first so the saved index reaches TASKS.length on the last
+  // task, which is what freePlay is restored from.
+  taskIndex++;
+  if (taskIndex >= TASKS.length) {
     freePlay = true;
     logLine('tutorial complete, free play unlocked');
   } else {
-    taskIndex++;
-    const next = currentTask();
-    editor.setSource(next.starter);
+    editor.setSource(currentTask().starter);
     autosaveProgram();
   }
   renderPanels();
@@ -203,7 +249,7 @@ function buildToolbar(): HTMLElement {
 }
 
 const client = new WorkerClient({
-  tick: (cells, pos) => {
+  tick: (cells, pos, state) => {
     for (const c of cells) {
       const cell = world.get(c.x, c.y, c.h);
       if (!cell) continue;
@@ -216,6 +262,10 @@ const client = new WorkerClient({
     mote.y = pos.y;
     mote.h = pos.h;
     mote.facing = pos.facing as typeof mote.facing;
+    // The worker owns the economy; mirror it so the panels and saves agree.
+    world.credits = state.credits;
+    mote.inventory = { ...state.inventory };
+    world.upgrades = { ...state.upgrades };
   },
   event: (kind, x, y, h, data) => logLine(`${kind} @(${x},${y},${h}) ${JSON.stringify(data)}`),
   console: (lines) => {
@@ -237,13 +287,21 @@ async function boot(): Promise<void> {
   camera.zoom = settings.zoom;
 
   try {
-    const savedWorld = await loadWorld<{ world: WorldJSON; mote: MoteJSON; taskIndex: number }>();
+    const savedWorld = await loadWorld<{ world: WorldJSON; mote: MoteJSON; taskIndex: number; chapter: 1 | 2 }>();
     if (savedWorld) {
-      world = World.fromJSON(savedWorld.world);
-      mote = Mote.fromJSON(savedWorld.mote);
-      taskIndex = savedWorld.taskIndex ?? 0;
-      freePlay = taskIndex >= TASKS.length;
-      client.init(savedWorld.world, savedWorld.mote);
+      // Chapter is stored explicitly because rule slots are functions and do not
+      // survive a JSON round trip; the Chapter 2 world is rebuilt from the rule
+      // modules instead of restored verbatim.
+      if (savedWorld.chapter === 2) {
+        enterChapter2({ silent: true, taskIndex: savedWorld.taskIndex ?? TASKS.length });
+        client.init(world.toJSON(), mote.toJSON());
+      } else {
+        world = World.fromJSON(savedWorld.world);
+        mote = Mote.fromJSON(savedWorld.mote);
+        taskIndex = Math.min(savedWorld.taskIndex ?? 0, TASKS.length);
+        if (taskIndex >= TASKS.length) freePlay = true;
+        client.init(world.toJSON(), mote.toJSON());
+      }
     }
   } catch {
     /* first run */
@@ -261,7 +319,7 @@ async function boot(): Promise<void> {
   editor.focus();
 
   const saveWorldNow = (): void => {
-    void saveWorld({ world: world.toJSON(), mote: mote.toJSON(), taskIndex });
+    void saveWorld({ world: world.toJSON(), mote: mote.toJSON(), taskIndex, chapter });
   };
   setInterval(saveWorldNow, 10_000);
   document.addEventListener('visibilitychange', () => {
@@ -284,6 +342,7 @@ async function boot(): Promise<void> {
 panelsEl.appendChild(consoleEl);
 panelsEl.appendChild(taskPanel.root);
 panelsEl.appendChild(resourcePanel.root);
+panelsEl.appendChild(chapterBtn);
 settingsPanel = new SettingsPanel((s) => client.setSpeed(s.speedMultiplier), { speedMultiplier: 1 });
 panelsEl.appendChild(settingsPanel.root);
 panelsEl.insertBefore(buildToolbar(), panelsEl.firstChild);
@@ -318,6 +377,7 @@ canvas.addEventListener('wheel', (e) => {
 
 function frame(): void {
   draw();
+  paintConsole(performance.now());
   requestAnimationFrame(frame);
 }
 
