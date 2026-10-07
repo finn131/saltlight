@@ -120,3 +120,41 @@ body {
   max-height: 40%;
   overflow: auto;
 }
+
+.panel {
+  border-top: 1px solid var(--ui-border);
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.panel h3 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ui-accent);
+}
+.panel-strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ui-text);
+}
+.panel-dim {
+  color: var(--rock-top);
+}
+.panel-hint {
+  margin: 4px 0 0;
+  color: var(--ui-text);
+  opacity: 0.8;
+}
+.panel label {
+  display: block;
+  margin: 3px 0;
+  color: var(--ui-text);
+}
+.panel select {
+  background: #3b4650;
+  color: var(--ui-text);
+  border: 1px solid #4a5560;
+  border-radius: 3px;
+  padding: 1px 4px;
+}
