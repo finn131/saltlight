@@ -31,9 +31,14 @@ if (!(canvasEl instanceof HTMLCanvasElement)) throw new Error('#grid-canvas miss
 const canvas: HTMLCanvasElement = canvasEl;
 const ctx: CanvasRenderingContext2D = canvas.getContext('2d')!;
 
-const editorEl = document.getElementById('editor');
-const panelsEl = document.getElementById('panels');
-if (!editorEl || !panelsEl) throw new Error('#editor and #panels are required');
+const editorEl = document.getElementById('editor')!;
+const editorBody = document.getElementById('editor-body')!;
+const editorDrag = document.getElementById('editor-drag')!;
+const taskPanelEl = document.getElementById('task-panel')!;
+const panelsEl = document.getElementById('panels')!;
+if (!editorEl || !editorBody || !editorDrag || !taskPanelEl || !panelsEl) {
+  throw new Error('app shell is missing one of #editor, #editor-body, #editor-drag, #task-panel, #panels');
+}
 
 let cssW = 1;
 let cssH = 1;
@@ -50,6 +55,102 @@ function resize(): void {
 
 const ANCHOR_X = TILE_W / 2;
 const ANCHOR_Y = TILE_H / 2;
+
+// ── draggable editor window ────────────────────────────────────────────────────────
+// Pointer drag plus arrow-key nudging, so the window is movable without a mouse.
+// Pointer capture keeps the drag alive when the cursor leaves the title bar.
+
+const DRAG_STEP = 24;
+let dragState: { id: number; dx: number; dy: number } | null = null;
+
+/** Below this width the editor is a bottom sheet, so it has nothing to drag. */
+const DOCK_BELOW = 1200;
+
+function clampEditor(): void {
+  if (window.innerWidth < DOCK_BELOW) {
+    editorEl.style.left = '';
+    editorEl.style.top = '';
+    editorEl.style.transform = '';
+    return;
+  }
+  const r = editorEl.getBoundingClientRect();
+  // Keep at least a grabbable strip of the title bar and 120px of body on screen.
+  const minVisible = 120;
+  const x = Math.min(window.innerWidth - minVisible, Math.max(minVisible - r.width, r.left));
+  const y = Math.min(window.innerHeight - 32, Math.max(0, r.top));
+  editorEl.style.left = `${x}px`;
+  editorEl.style.top = `${y}px`;
+  editorEl.style.transform = 'none';
+}
+
+editorDrag.addEventListener('pointerdown', (e) => {
+  if (window.innerWidth < DOCK_BELOW) return;
+  const r = editorEl.getBoundingClientRect();
+  dragState = { id: e.pointerId, dx: e.clientX - r.left, dy: e.clientY - r.top };
+  // Freeze the visual spot before .dragging drops the centering transform,
+  // otherwise the window teleports right by half its width on mousedown.
+  editorEl.style.left = `${r.left}px`;
+  editorEl.style.top = `${r.top}px`;
+  editorEl.style.transform = 'none';
+  editorEl.classList.add('dragging');
+  editorDrag.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+
+editorDrag.addEventListener('pointermove', (e) => {
+  if (!dragState || dragState.id !== e.pointerId) return;
+  editorEl.style.left = `${e.clientX - dragState.dx}px`;
+  editorEl.style.top = `${e.clientY - dragState.dy}px`;
+  editorEl.style.transform = 'none';
+});
+
+function endDrag(e: PointerEvent): void {
+  if (!dragState || dragState.id !== e.pointerId) return;
+  dragState = null;
+  editorEl.classList.remove('dragging');
+  if (editorDrag.hasPointerCapture(e.pointerId)) editorDrag.releasePointerCapture(e.pointerId);
+  clampEditor();
+  announcePosition();
+}
+
+editorDrag.addEventListener('pointerup', endDrag);
+editorDrag.addEventListener('pointercancel', endDrag);
+
+// Screen-reader users get no visual feedback from an arrow-key nudge, so the
+// new position is written into the handle's label.
+function announcePosition(): void {
+  const r = editorEl.getBoundingClientRect();
+  editorDrag.setAttribute('aria-label', `Move the Loam window. Use the arrow keys. Position ${Math.round(r.left)}, ${Math.round(r.top)}.`);
+}
+
+editorDrag.addEventListener('keydown', (e) => {
+  const nudge: Record<string, [number, number]> = {
+    ArrowLeft: [-DRAG_STEP, 0],
+    ArrowRight: [DRAG_STEP, 0],
+    ArrowUp: [0, -DRAG_STEP],
+    ArrowDown: [0, DRAG_STEP],
+  };
+  const delta = nudge[e.key];
+  if (!delta) return;
+  const r = editorEl.getBoundingClientRect();
+  editorEl.style.left = `${r.left + delta[0]}px`;
+  editorEl.style.top = `${r.top + delta[1]}px`;
+  editorEl.style.transform = 'none';
+  clampEditor();
+  announcePosition();
+  e.preventDefault();
+});
+
+window.addEventListener('resize', clampEditor);
+
+// The drag hint must not promise an interaction that is switched off.
+const dragHint = document.getElementById('editor-drag-hint');
+function syncDragHint(): void {
+  if (!dragHint) return;
+  dragHint.style.display = window.innerWidth < DOCK_BELOW ? 'none' : '';
+}
+syncDragHint();
+window.addEventListener('resize', syncDragHint);
 
 function draw(): void {
   ctx.clearRect(0, 0, cssW, cssH);
@@ -81,6 +182,9 @@ function draw(): void {
 
 const consoleEl = document.createElement('div');
 consoleEl.className = 'console';
+consoleEl.setAttribute('role', 'log');
+consoleEl.setAttribute('aria-live', 'polite');
+consoleEl.setAttribute('aria-label', 'Program output');
 
 const eventLog: string[] = [];
 // ponytail: coalesce writes; the keep-alive can emit hundreds of ticks a second
@@ -136,7 +240,9 @@ let settingsPanel: SettingsPanel;
 const chapterBtn = document.createElement('button');
 chapterBtn.textContent = 'Descend';
 chapterBtn.className = 'btn';
+chapterBtn.style.alignSelf = 'flex-start';
 chapterBtn.style.display = 'none';
+chapterBtn.setAttribute('aria-label', 'Descend into the Deep Trench, Chapter 2');
 chapterBtn.addEventListener('click', () => enterChapter2());
 
 function currentTask() {
@@ -215,10 +321,15 @@ function clearWorld(): void {
 function buildToolbar(): HTMLElement {
   const bar = document.createElement('div');
   bar.className = 'toolbar';
-  const btn = (label: string, fn: () => void): HTMLButtonElement => {
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', 'Program controls');
+  const btn = (label: string, fn: () => void, ariaLabel: string): HTMLButtonElement => {
     const b = document.createElement('button');
     b.textContent = label;
     b.className = 'btn';
+    b.type = 'button';
+    b.title = ariaLabel;
+    b.setAttribute('aria-label', ariaLabel);
     b.addEventListener('click', fn);
     bar.appendChild(b);
     return b;
@@ -228,23 +339,22 @@ function buildToolbar(): HTMLElement {
     eventLog.length = 0;
     consoleEl.textContent = '';
     client.run(editor.getSource(), PROGRAM_ID);
-  });
-  btn('Pause', () => client.pause());
-  btn('Resume', () => client.resume());
-  btn('Step', () => client.step(1));
-  btn('Check', () => checkTask());
-  btn('Reset', () => clearWorld());
+  }, 'Run the program');
+  btn('Pause', () => client.pause(), 'Pause the simulation');
+  btn('Resume', () => client.resume(), 'Resume the simulation');
+  btn('Step', () => client.step(1), 'Advance one slice');
+  btn('Check', () => checkTask(), 'Check the current task');
+  btn('Reset', () => clearWorld(), 'Reset the island');
   btn('Export', () => {
     if (!editor) return;
     downloadProgram(editor.getSource(), 'main');
-  });
+  }, 'Export the program as a .py file');
   btn('Import', () =>
     pickProgramFile((source) => {
       if (!editor) return;
       editor.setSource(source);
       autosaveProgram();
-    })
-  );
+    }), 'Import a .py file without running it');
   return bar;
 }
 
@@ -315,8 +425,9 @@ async function boot(): Promise<void> {
     /* fall back to the task starter */
   }
 
-  editor = createEditor(editorEl!, initialSource, debounce(autosaveProgram, 1000));
+  editor = createEditor(editorBody, initialSource, debounce(autosaveProgram, 1000));
   editor.focus();
+  clampEditor();
 
   const saveWorldNow = (): void => {
     void saveWorld({ world: world.toJSON(), mote: mote.toJSON(), taskIndex, chapter });
@@ -340,12 +451,12 @@ async function boot(): Promise<void> {
 }
 
 panelsEl.appendChild(consoleEl);
-panelsEl.appendChild(taskPanel.root);
 panelsEl.appendChild(resourcePanel.root);
 panelsEl.appendChild(chapterBtn);
 settingsPanel = new SettingsPanel((s) => client.setSpeed(s.speedMultiplier), { speedMultiplier: 1 });
 panelsEl.appendChild(settingsPanel.root);
 panelsEl.insertBefore(buildToolbar(), panelsEl.firstChild);
+taskPanelEl.appendChild(taskPanel.root);
 
 let dragging = false;
 let lastX = 0;
@@ -368,6 +479,10 @@ canvas.addEventListener('pointermove', (e) => {
 canvas.addEventListener('pointerup', (e) => {
   dragging = false;
   canvas.releasePointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointercancel', (e) => {
+  dragging = false;
+  if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
 });
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
