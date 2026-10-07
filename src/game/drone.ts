@@ -177,11 +177,19 @@ export class Mote {
     return true;
   }
 
-  dispatch(invoke: (fn: RuleFn, ctx: Record<string, unknown>) => unknown): void {
-    if (this.pending.length === 0) return;
+  /**
+   * Fire the bound rule for each queued event.
+   *
+   * `queue` lets a caller that already drained `pending` (to post the events to
+   * the main thread) hand the same batch over instead of having dispatch find
+   * an empty queue. Events enqueued by a rule are left in `pending` for the next
+   * dispatch, which is what stops a rule from looping on its own event.
+   */
+  dispatch(invoke: (fn: RuleFn, ctx: Record<string, unknown>) => unknown, queue?: PendingEvent[]): void {
+    const batch = queue ?? this.pending.splice(0, this.pending.length);
+    if (batch.length === 0) return;
     // ponytail: events enqueued during a rule dispatch defer to the next tick, prevents harvest loops
-    const snapshot = this.pending.splice(0, this.pending.length);
-    for (const ev of snapshot) {
+    for (const ev of batch) {
       const fn = this.rules.get(ev.kind);
       if (!fn) continue;
       const frozen = Object.freeze({ ...ev.ctx });
