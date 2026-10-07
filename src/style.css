@@ -62,3 +62,61 @@ body {
   background: var(--ui-panel);
   overflow: auto;
 }
+
+#editor .cm-editor {
+  height: 100%;
+  font-size: 14px;
+}
+
+#editor .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.tok-keyword {
+  color: #f2c14e;
+  font-weight: 600;
+}
+.tok-number {
+  color: #8fd694;
+}
+.tok-string {
+  color: #9ad5c0;
+}
+.tok-name {
+  color: #cfe3ee;
+}
+.tok-op {
+  color: #7b8087;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.btn {
+  background: #3b4650;
+  color: var(--ui-text);
+  border: 1px solid #4a5560;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.btn:hover {
+  background: var(--ui-accent);
+  color: #1b2026;
+}
+
+.console {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  padding: 6px;
+  color: var(--ui-text);
+  max-height: 40%;
+  overflow: auto;
+}
