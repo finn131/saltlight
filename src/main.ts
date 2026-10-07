@@ -1,13 +1,13 @@
 import './style.css';
-import { World } from './game/world';
-import { Mote } from './game/drone';
+import { World, type WorldJSON } from './game/world';
+import { Mote, type MoteJSON } from './game/drone';
 import { WorkerClient } from './workerClient';
 import { bakeSprites, type SpriteAtlas } from './render/sprites';
 import { project, drawOrder, TILE_W, TILE_H, TILE_Z } from './render/iso';
 import { createCamera, clampZoom, clampPan, viewport, cullCells, worldExtents } from './render/camera';
 import { createEditor } from './ui/editor';
 import { downloadProgram, pickProgramFile } from './ui/filetools';
-import { DEFAULT_SETTINGS, loadSettings, saveProgram, saveSettings, getProgram, debounce } from './ui/store';
+import { DEFAULT_SETTINGS, loadSettings, saveProgram, saveSettings, loadWorld, saveWorld, getProgram, debounce } from './ui/store';
 
 const GRID = 40;
 const STARTER = "report('hello')\n";
@@ -120,6 +120,7 @@ function buildToolbar(): HTMLElement {
     return b;
   };
   btn('Run', () => {
+    if (!editor) return;
     eventLog.length = 0;
     consoleEl.textContent = '';
     client.run(editor.getSource(), 'main');
@@ -128,9 +129,13 @@ function buildToolbar(): HTMLElement {
   btn('Resume', () => client.resume());
   btn('Step', () => client.step(1));
   btn('Reset', () => clearWorld());
-  btn('Export', () => downloadProgram(editor.getSource(), 'main'));
+  btn('Export', () => {
+    if (!editor) return;
+    downloadProgram(editor.getSource(), 'main');
+  });
   btn('Import', () =>
     pickProgramFile((source) => {
+      if (!editor) return;
       // ponytail: import only loads text; it never runs. Run is a separate click.
       editor.setSource(source);
       autosaveProgram();
@@ -169,15 +174,59 @@ client.init(world.toJSON(), mote.toJSON());
 // ─── boot -----------------------------------------------------------------------------
 
 async function boot(): Promise<void> {
-  const settings = await loadSettings();
-  camera.zoom = settings.zoom ?? DEFAULT_SETTINGS.zoom;
+  let settings = DEFAULT_SETTINGS;
+  try {
+    settings = await loadSettings();
+  } catch {
+    // IndexedDB unavailable: run with defaults rather than block the editor.
+  }
+  camera.zoom = settings.zoom;
 
-  const saved = await getProgram(PROGRAM_ID);
-  editor = createEditor(editorEl!, saved?.source ?? STARTER, debounce(autosaveProgram, 1000));
+  let initialSource = STARTER;
+  try {
+    const saved = await getProgram(PROGRAM_ID);
+    if (saved?.source) initialSource = saved.source;
+  } catch {
+    // fall back to the starter program
+  }
+
+  editor = createEditor(editorEl!, initialSource, debounce(autosaveProgram, 1000));
   editor.focus();
 
-  const saveSettingsDebounced = debounce(() => void saveSettings({ speedMultiplier: settings.speedMultiplier, zoom: camera.zoom, textScale: settings.textScale, spriteDetail: settings.spriteDetail }), 400);
-  window.addEventListener('beforeunload', () => void saveSettings({ speedMultiplier: settings.speedMultiplier, zoom: camera.zoom, textScale: settings.textScale, spriteDetail: settings.spriteDetail }));
+  // Restore the world from the last session, if any.
+  try {
+    const savedWorld = await loadWorld<{ world: WorldJSON; mote: MoteJSON }>();
+    if (savedWorld) {
+      for (const c of savedWorld.world.cells) world.set(c);
+      mote.x = savedWorld.mote.x;
+      mote.y = savedWorld.mote.y;
+      mote.h = savedWorld.mote.h;
+      mote.facing = savedWorld.mote.facing;
+      client.init(savedWorld.world, savedWorld.mote);
+    }
+  } catch {
+    // first run, or IDB unavailable
+  }
+
+  // ponytail: the main-thread world mirror is kept current by tick deltas, so
+  // world.toJSON() is the state to persist. Autosave every 10s, on tab hide,
+  // and on pagehide.
+  const saveWorldNow = (): void => {
+    void saveWorld({ world: world.toJSON(), mote: mote.toJSON() });
+  };
+  setInterval(saveWorldNow, 10_000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) saveWorldNow();
+  });
+  window.addEventListener('pagehide', () => {
+    saveWorldNow();
+    autosaveProgram();
+  });
+
+  const saveSettingsNow = (): void =>
+    void saveSettings({ speedMultiplier: settings.speedMultiplier, zoom: camera.zoom, textScale: settings.textScale, spriteDetail: settings.spriteDetail });
+  const saveSettingsDebounced = debounce(saveSettingsNow, 400);
+  window.addEventListener('pagehide', saveSettingsNow);
   window.addEventListener('wheel', saveSettingsDebounced, { passive: true });
 }
 

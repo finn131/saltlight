@@ -2,7 +2,7 @@ import { EditorView, keymap, highlightActiveLine, lineNumbers, drawSelection, De
 import { EditorState, RangeSetBuilder, type Extension } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { autocompletion, completionKeymap, type CompletionContext } from '@codemirror/autocomplete';
-import { tokenize, TokenizeError, type Token } from '../vm/tokenizer';
+import { tokenize, type Token } from '../vm/tokenizer';
 import { loamCompletions } from './completion';
 
 // Token type -> CSS class. INDENT/DEDENT/NEWLINE/EOF carry no text.
@@ -27,11 +27,11 @@ function buildDecorations(src: string): RangeSetBuilder<Decoration> | null {
   let tokens: Token[];
   try {
     tokens = tokenize(src);
-  } catch (e) {
+  } catch {
     // ponytail: a tab or unterminated string stops highlighting; the located
-    // error is surfaced from the worker. Upgrade path: partial highlight.
-    if (e instanceof TokenizeError) return null;
-    throw e;
+    // error is surfaced from the worker. Any tokenizer error degrades to plain
+    // text rather than throwing inside the CodeMirror update pipeline.
+    return null;
   }
   const lineStarts = [0];
   for (let i = 0; i < src.length; i++) if (src[i] === '\n') lineStarts.push(i + 1);
@@ -84,6 +84,25 @@ export function createEditor(parent: HTMLElement, initial: string, onChange?: ()
     if (u.docChanged) onChange?.();
   });
 
+  // Enter keeps the previous line's indentation; Loam rejects tabs and wants
+  // 4-space levels, and a beginner should not have to retype them each line.
+  const keepIndent = keymap.of([
+    {
+      key: 'Enter',
+      run: (view) => {
+        const pos = view.state.selection.main.head;
+        const line = view.state.doc.lineAt(pos);
+        const indent = /^ */.exec(line.text)?.[0] ?? '';
+        view.dispatch({
+          changes: { from: pos, insert: '\n' + indent },
+          selection: { anchor: pos + 1 + indent.length },
+          scrollIntoView: true,
+        });
+        return true;
+      },
+    },
+  ]);
+
   const view = new EditorView({
     parent,
     state: EditorState.create({
@@ -94,6 +113,7 @@ export function createEditor(parent: HTMLElement, initial: string, onChange?: ()
         drawSelection(),
         highlightActiveLine(),
         keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
+        keepIndent,
         autocompletion({ override: [loamCompletionSource] }),
         loamHighlight,
         EditorView.lineWrapping,
