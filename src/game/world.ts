@@ -24,6 +24,10 @@ export interface CellDelta {
 
 export interface WorldRuleSlots {
   claimWater?: (cell: Cell) => boolean;
+  /** Chapter 2 fog: override the terrain id that sense() reports. */
+  senseFilter?: (cell: Cell, mote: { x: number; y: number; h: number }) => string;
+  /** Chapter 2 current: per-tick drift applied inside move(). */
+  moveDrift?: (cell: Cell, mote: { x: number; y: number; h: number }) => { dx: number; dy: number };
 }
 
 export interface WorldJSON {

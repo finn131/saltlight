@@ -32,6 +32,10 @@ export interface MoteJSON {
 interface WorldLike {
   allowVertical: boolean;
   get(x: number, y: number, h: number): { terrain: string } | undefined;
+  rules?: {
+    senseFilter?: (cell: { terrain: string; x: number; y: number; h: number }, mote: { x: number; y: number; h: number }) => string;
+    moveDrift?: (cell: { terrain: string; x: number; y: number; h: number }, mote: { x: number; y: number; h: number }) => { dx: number; dy: number };
+  };
 }
 
 const VEC: Record<Facing, readonly [number, number]> = {
@@ -123,7 +127,20 @@ export class Mote {
   }
 
   move(world: WorldLike, dir: string): boolean {
-    const [dx, dy] = resolveDir(this.facing, dir);
+    const [dx0, dy0] = resolveDir(this.facing, dir);
+    let dx = dx0;
+    let dy = dy0;
+    // Chapter 2 current drifts the target before the walkability check. The
+    // rule only ever modifies offsets, never terrain rules, so nothing here
+    // branches on which chapter is loaded.
+    if (world.rules?.moveDrift) {
+      const from = world.get(this.x, this.y, this.h);
+      if (from) {
+        const d = world.rules.moveDrift(from as never, { x: this.x, y: this.y, h: this.h });
+        dx += d.dx;
+        dy += d.dy;
+      }
+    }
     const tx = this.x + dx;
     const ty = this.y + dy;
     const cell = world.get(tx, ty, this.h);
@@ -139,7 +156,11 @@ export class Mote {
   sense(world: WorldLike, dir: string): string {
     const [dx, dy] = resolveDir(this.facing, dir);
     const cell = world.get(this.x + dx, this.y + dy, this.h);
-    return cell ? cell.terrain : 'UNKNOWN';
+    if (!cell) return 'UNKNOWN';
+    if (world.rules?.senseFilter) {
+      return world.rules.senseFilter(cell as never, { x: this.x, y: this.y, h: this.h });
+    }
+    return cell.terrain;
   }
 
   ascend(world: WorldLike): boolean {
