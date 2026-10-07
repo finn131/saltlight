@@ -202,19 +202,16 @@ export function runTask(source: string, opts: RunOptions = {}): TaskTrace {
 
   // Count events pending before this dispatch, only for kinds with a bound rule.
   const dispatchRound = (): void => {
-    const batch = mote.pending.splice(0, mote.pending.length);
-    for (const ev of batch) {
+    for (const ev of mote.pending) {
       if (mote.rules.has(ev.kind)) ruleFires[ev.kind] = (ruleFires[ev.kind] ?? 0) + 1;
       events.push(ev.kind);
     }
-    if (batch.length > 0) {
-      try {
-        mote.dispatch((fn, ctx) => interp.callRule(fn, ctx), batch);
-      } catch (e) {
-        if (e instanceof OpCapError) aborted = true;
-      }
-      for (const ev of mote.pending.splice(0, mote.pending.length)) events.push(ev.kind);
+    try {
+      mote.dispatch((fn, ctx) => interp.callRule(fn, ctx));
+    } catch (e) {
+      if (e instanceof OpCapError) aborted = true;
     }
+    for (const ev of mote.pending) events.push(ev.kind);
   };
 
   try {
