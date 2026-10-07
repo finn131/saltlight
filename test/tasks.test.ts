@@ -15,8 +15,6 @@ registerHooks({
 const { TASKS, runTask, evaluateTask, analyze } = await import('../src/game/tasks.ts');
 const { parse } = await import('../src/vm/parser.ts');
 
-// --- acceptance 2: each task advances only on the observable effect ----------------------
-
 for (const task of TASKS) {
   test(`task ${task.id} (${task.name}): reference pass program passes`, () => {
     const { passed, trace } = evaluateTask(task, task.referencePass);
@@ -29,8 +27,6 @@ for (const task of TASKS) {
     assert.equal(passed, false, 'expected fail');
   });
 }
-
-// --- runner behaviour ---------------------------------------------------------------------
 
 test('runTask: parse error is reported and never advances', () => {
   const t = runTask('def broken(:\n    pass\n');
@@ -70,3 +66,21 @@ test('task 9: fires a harvest rule with no top-level loop', () => {
   assert.ok((trace.ruleFires['harvest'] ?? 0) >= 3, `harvest rule fired ${trace.ruleFires['harvest']} times`);
   assert.equal(passed, true);
 });
+
+for (const task of TASKS) {
+  test(`starter for task ${task.id} (${task.name}) passes its own check`, () => {
+    const { passed, trace } = evaluateTask(task, task.starter);
+    assert.equal(trace.parseError, null, 'starter parses');
+    assert.equal(passed, true, `starter fails its own check; ops=${trace.opsUsed} moves=${trace.moves} rules=${JSON.stringify(trace.ruleFires)}`);
+  });
+}
+
+for (const task of TASKS) {
+  if (task.id === 1) continue;
+  test(`trivial program does not pass task ${task.id} (${task.name})`, () => {
+    for (const trivial of ['pass\n', 'x = 1\n', "report('hello')\n"]) {
+      const { passed } = evaluateTask(task, trivial);
+      assert.equal(passed, false, `'${trivial.trim()}' must not pass task ${task.id}`);
+    }
+  });
+}
