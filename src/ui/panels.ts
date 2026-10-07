@@ -25,10 +25,17 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
 
 export class TaskPanel {
   readonly root: HTMLElement;
+  private key = '';
   constructor() {
-    this.root = el('div', 'panel panel-task');
+    // #task-panel supplies the window chrome, so this is content only.
+    this.root = el('div', 'task-body');
   }
   render(s: PanelTaskState): void {
+    // renderPanels runs on a timer; skip the DOM write (and the aria-live
+    // re-announcement) when nothing actually changed.
+    const key = `${s.index}|${s.name}|${s.concept}|${s.hint}|${s.total}`;
+    if (key === this.key) return;
+    this.key = key;
     this.root.textContent = '';
     this.root.appendChild(el('h3', undefined, `Task ${s.index + 1} / ${s.total}`));
     this.root.appendChild(el('div', 'panel-strong', s.name));

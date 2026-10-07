@@ -3,13 +3,43 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
     <title>SaltLight</title>
   </head>
   <body>
     <div id="app">
-      <canvas id="grid-canvas" aria-label="Grid"></canvas>
-      <aside id="editor" aria-label="Editor"></aside>
-      <aside id="panels" aria-label="Panels"></aside>
+      <canvas id="grid-canvas" role="img" aria-label="Island grid"></canvas>
+
+      <section
+        id="editor"
+        class="window"
+        role="region"
+        aria-labelledby="editor-title"
+      >
+        <div
+          class="window-bar window-drag"
+          id="editor-drag"
+          tabindex="0"
+          role="group"
+          aria-label="Move the Loam window. Use the arrow keys."
+          aria-describedby="editor-drag-hint"
+        >
+          <h2 class="window-title" id="editor-title">Loam</h2>
+          <span class="window-hint" id="editor-drag-hint">drag to move</span>
+        </div>
+        <div class="window-body" id="editor-body"></div>
+      </section>
+
+      <aside
+        id="task-panel"
+        role="region"
+        aria-labelledby="task-title"
+        aria-live="polite"
+      >
+        <h2 class="sr-only" id="task-title">Current task</h2>
+      </aside>
+
+      <section id="panels" aria-label="Controls, output and storehouse"></section>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
