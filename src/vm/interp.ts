@@ -131,6 +131,8 @@ export class Interp {
   readonly reports: string[];
   ops = 0;
   lastLine = 0;
+  /** Number of user-defined function invocations at runtime (task scoring). */
+  userCalls = 0;
   private root: Generator<void, void, void> | null = null;
   private hardCap: number;
   private env = new Map<string, unknown>();
@@ -398,6 +400,7 @@ export class Interp {
         const args: unknown[] = [];
         for (const a of e.args) args.push(yield* this.evalExpr(a));
         if (isLoamFn(callee)) {
+          this.userCalls++;
           if (args.length !== callee.params.length) {
             throw new RuntimeError(`${callee.name}() takes ${callee.params.length} ${callee.params.length === 1 ? 'argument' : 'arguments'} but ${args.length} ${args.length === 1 ? 'was' : 'were'} given`, e.line);
           }
