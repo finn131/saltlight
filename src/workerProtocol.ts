@@ -18,7 +18,7 @@ export type ErrorPhase = 'tokenize' | 'parse' | 'runtime';
 export type FromWorker =
   | { type: 'ready'; version: string }
   | { type: 'started'; programId: string }
-  | { type: 'tick'; cells: CellDelta[]; mote: { x: number; y: number; h: number; facing: string } }
+  | { type: 'tick'; cells: CellDelta[]; mote: { x: number; y: number; h: number; facing: string }; credits: number; inventory: Record<string, number>; upgrades: Record<string, number> }
   | { type: 'event'; kind: string; x: number; y: number; h: number; data: Record<string, unknown> }
   | { type: 'console'; lines: string[] }
   | { type: 'stepped'; line: number; locals: Record<string, unknown> }
@@ -99,6 +99,9 @@ export class WorkerRuntime {
 
     this.interp = new Interp(stmts, { hardCap: this.hardCap, world: this.world, mote: this.mote });
     this.programDone = false;
+    // A new program starts with no rules: bindings from a previous run must not
+    // outlive the program that made them.
+    if (this.mote) this.mote.rules.clear();
     this.paused = false;
     this.post({ type: 'started', programId });
     this.scheduleNext();
@@ -217,6 +220,9 @@ export class WorkerRuntime {
           type: 'tick',
           cells,
           mote: mote ? { x: mote.x, y: mote.y, h: mote.h, facing: mote.facing } : { x: 0, y: 0, h: 0, facing: 'north' },
+          credits: this.world.credits,
+          inventory: mote ? { ...mote.inventory } : {},
+          upgrades: { ...this.world.upgrades },
         });
       }
     }
@@ -234,7 +240,9 @@ export class WorkerRuntime {
       }
       if (this.interp) {
         try {
-          this.mote.dispatch((fn, ctx) => this.interp!.callRule(fn, ctx));
+          // Hand over the batch we already drained, otherwise dispatch finds an
+          // empty queue and no rule ever fires.
+          this.mote.dispatch((fn, ctx) => this.interp!.callRule(fn, ctx), events);
         } catch (e) {
           this.handleError(e);
           return;

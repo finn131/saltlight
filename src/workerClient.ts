@@ -5,7 +5,11 @@ import type { MoteJSON } from './game/drone';
 export type WorkerHandlers = {
   ready?: (version: string) => void;
   started?: (programId: string) => void;
-  tick?: (cells: CellDelta[], mote: { x: number; y: number; h: number; facing: string }) => void;
+  tick?: (
+    cells: CellDelta[],
+    mote: { x: number; y: number; h: number; facing: string },
+    state: { credits: number; inventory: Record<string, number>; upgrades: Record<string, number> }
+  ) => void;
   event?: (kind: string, x: number, y: number, h: number, data: Record<string, unknown>) => void;
   console?: (lines: string[]) => void;
   stepped?: (line: number, locals: Record<string, unknown>) => void;
@@ -33,7 +37,7 @@ export class WorkerClient {
     switch (msg.type) {
       case 'ready': return this.handlers.ready?.(msg.version);
       case 'started': return this.handlers.started?.(msg.programId);
-      case 'tick': return this.handlers.tick?.(msg.cells, msg.mote);
+      case 'tick': return this.handlers.tick?.(msg.cells, msg.mote, { credits: msg.credits, inventory: msg.inventory, upgrades: msg.upgrades });
       case 'event': return this.handlers.event?.(msg.kind, msg.x, msg.y, msg.h, msg.data);
       case 'console': return this.handlers.console?.(msg.lines);
       case 'stepped': return this.handlers.stepped?.(msg.line, msg.locals);
