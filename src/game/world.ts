@@ -1,5 +1,6 @@
 import { TERRAIN, type TerrainId } from './terrain';
 import { CROPS, growthTick, type CropId } from './crops';
+import { yieldMultiplier } from './upgrades';
 
 export interface Cell {
   x: number;
@@ -31,6 +32,7 @@ export interface WorldJSON {
   credits: number;
   tech: string[];
   cells: Cell[];
+  upgrades: Record<string, number>;
 }
 
 interface MoteLike {
@@ -49,6 +51,7 @@ export class World {
   tech: Set<string>;
   readonly rules: WorldRuleSlots;
   allowVertical: boolean;
+  upgrades: Record<string, number> = {};
   private store = new Map<string, Cell>();
   private dirty = new Map<string, CellDelta>();
 
@@ -153,14 +156,15 @@ export class World {
     if (!cell || cell.plant === null) return 0;
     const crop = CROPS[cell.plant];
     if (cell.growth < crop.growthSteps) return 0;
-    // ponytail: 1 credit per yield unit; add creditsPerUnit to CropDef if balance needs it
-    mote.inventory[crop.id] = (mote.inventory[crop.id] ?? 0) + crop.yieldAmount;
-    this.credits += crop.yieldAmount;
+    // ponytail: 1 credit per yield unit; the yield upgrade scales the harvest.
+    const amount = crop.yieldAmount * yieldMultiplier(this.upgrades['yield'] ?? 0);
+    mote.inventory[crop.id] = (mote.inventory[crop.id] ?? 0) + amount;
+    this.credits += amount;
     cell.plant = null;
     cell.growth = 0;
     this.markDirty(cell);
-    mote.enqueue('harvest', { amount: crop.yieldAmount, crop: crop.id, x: cell.x, y: cell.y, h: cell.h });
-    return crop.yieldAmount;
+    mote.enqueue('harvest', { amount, crop: crop.id, x: cell.x, y: cell.y, h: cell.h });
+    return amount;
   }
 
   water(mote: { x: number; y: number; h: number }): boolean {
@@ -195,12 +199,14 @@ export class World {
       credits: this.credits,
       tech: [...this.tech],
       cells: [...this.store.values()],
+      upgrades: { ...this.upgrades },
     };
   }
 
   static fromJSON(j: WorldJSON): World {
     const w = new World({ width: j.width, height: j.height, credits: j.credits });
     w.tech = new Set(j.tech);
+    w.upgrades = { ...(j.upgrades ?? {}) };
     w.store.clear();
     w.dirty.clear();
     for (const c of j.cells) w.store.set(w.key(c.x, c.y, c.h), { ...c });
