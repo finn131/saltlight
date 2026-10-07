@@ -5,9 +5,13 @@ import { WorkerClient } from './workerClient';
 import { bakeSprites, type SpriteAtlas } from './render/sprites';
 import { project, drawOrder, TILE_W, TILE_H, TILE_Z } from './render/iso';
 import { createCamera, clampZoom, clampPan, viewport, cullCells, worldExtents } from './render/camera';
+import { createEditor } from './ui/editor';
+import { downloadProgram, pickProgramFile } from './ui/filetools';
+import { DEFAULT_SETTINGS, loadSettings, saveProgram, saveSettings, getProgram, debounce } from './ui/store';
 
-// ponytail: ROADMAP acceptance 2 measures a 40x40 grid with ~4000 visible tiles
 const GRID = 40;
+const STARTER = "report('hello')\n";
+const PROGRAM_ID = 'main';
 
 const world = new World({ width: GRID, height: GRID });
 const mote = new Mote();
@@ -19,7 +23,10 @@ if (!(canvasEl instanceof HTMLCanvasElement)) throw new Error('#grid-canvas miss
 const canvas: HTMLCanvasElement = canvasEl;
 const ctx: CanvasRenderingContext2D = canvas.getContext('2d')!;
 
-// ponytail: cache rect size — getBoundingClientRect per frame is a layout read
+const editorEl = document.getElementById('editor');
+const panelsEl = document.getElementById('panels');
+if (!editorEl || !panelsEl) throw new Error('#editor and #panels are required');
+
 let cssW = 1;
 let cssH = 1;
 
@@ -36,10 +43,8 @@ function resize(): void {
 const ANCHOR_X = TILE_W / 2;
 const ANCHOR_Y = TILE_H / 2;
 
-// ponytail: render loop is blits only; all path work happens in bakeSprites
 function draw(): void {
   ctx.clearRect(0, 0, cssW, cssH);
-
   const ox = cssW / 2 + camera.x;
   const { extentY } = worldExtents(camera);
   const oy = cssH / 2 - (extentY * camera.zoom) / 2;
@@ -52,15 +57,10 @@ function draw(): void {
     const px = ox + sx * z - ANCHOR_X * z;
     const py = oy + sy * z - ANCHOR_Y * z - TILE_Z * z;
     const terrain = atlas[cell.terrain];
-    if (terrain) {
-      ctx.drawImage(terrain, px, py, TILE_W * z, (TILE_H + TILE_Z * 2) * z);
-    }
+    if (terrain) ctx.drawImage(terrain, px, py, TILE_W * z, (TILE_H + TILE_Z * 2) * z);
     if (cell.plant !== null) {
-      const key = cell.plant + '_' + cell.growth;
-      const crop = atlas[key] ?? atlas[cell.plant + '_0'];
-      if (crop) {
-        ctx.drawImage(crop, px, py - TILE_H * z, TILE_W * z, TILE_H * 2 * z);
-      }
+      const crop = atlas[cell.plant + '_' + cell.growth] ?? atlas[cell.plant + '_0'];
+      if (crop) ctx.drawImage(crop, px, py - TILE_H * z, TILE_W * z, TILE_H * 2 * z);
     }
   }
 
@@ -70,6 +70,118 @@ function draw(): void {
     ctx.drawImage(moteTile, ox + mp.sx * z - ANCHOR_X * z, oy + mp.sy * z - ANCHOR_Y * z - TILE_Z * z, TILE_W * z, (TILE_H + TILE_Z * 2) * z);
   }
 }
+
+// ─── console --------------------------------------------------------------------------
+
+const consoleEl = document.createElement('div');
+consoleEl.className = 'console';
+panelsEl.appendChild(consoleEl);
+
+const eventLog: string[] = [];
+function logLine(s: string): void {
+  eventLog.push(s);
+  if (eventLog.length > 200) eventLog.shift();
+  consoleEl.textContent = eventLog.join('\n');
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+// ─── editor + UI ----------------------------------------------------------------------
+
+let editor!: import('./ui/editor').EditorHandle;
+
+function autosaveProgram(): void {
+  const rec = { id: PROGRAM_ID, name: 'main', source: editor.getSource(), updatedAt: Date.now() };
+  void saveProgram(rec);
+}
+
+function clearWorld(): void {
+  for (const c of world.getAllCells()) {
+    c.terrain = 'soil';
+    c.plant = null;
+    c.growth = 0;
+    c.moisture = 0;
+  }
+  mote.x = 0;
+  mote.y = 0;
+  mote.h = 0;
+  mote.facing = 'north';
+  client.init(world.toJSON(), mote.toJSON());
+}
+
+function buildToolbar(): HTMLElement {
+  const bar = document.createElement('div');
+  bar.className = 'toolbar';
+  const btn = (label: string, fn: () => void): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.className = 'btn';
+    b.addEventListener('click', fn);
+    bar.appendChild(b);
+    return b;
+  };
+  btn('Run', () => {
+    eventLog.length = 0;
+    consoleEl.textContent = '';
+    client.run(editor.getSource(), 'main');
+  });
+  btn('Pause', () => client.pause());
+  btn('Resume', () => client.resume());
+  btn('Step', () => client.step(1));
+  btn('Reset', () => clearWorld());
+  btn('Export', () => downloadProgram(editor.getSource(), 'main'));
+  btn('Import', () =>
+    pickProgramFile((source) => {
+      // ponytail: import only loads text; it never runs. Run is a separate click.
+      editor.setSource(source);
+      autosaveProgram();
+    })
+  );
+  return bar;
+}
+
+// ─── worker ---------------------------------------------------------------------------
+
+const client = new WorkerClient({
+  tick: (cells, pos) => {
+    for (const c of cells) {
+      const cell = world.get(c.x, c.y, c.h);
+      if (!cell) continue;
+      if (c.terrain !== undefined) cell.terrain = c.terrain;
+      if (c.plant !== undefined) cell.plant = c.plant;
+      if (c.growth !== undefined) cell.growth = c.growth;
+      if (c.moisture !== undefined) cell.moisture = c.moisture;
+    }
+    mote.x = pos.x;
+    mote.y = pos.y;
+    mote.h = pos.h;
+    mote.facing = pos.facing as typeof mote.facing;
+  },
+  event: (kind, x, y, h, data) => logLine(`${kind} @(${x},${y},${h}) ${JSON.stringify(data)}`),
+  console: (lines) => {
+    for (const l of lines) logLine(`> ${l}`);
+  },
+  error: (e) => logLine(`ERROR ${e.phase} line ${e.line} col ${e.col}: ${e.message}`),
+  aborted: (a) => logLine(`ABORTED ${a.reason} after ${a.ops} ops`),
+});
+
+client.init(world.toJSON(), mote.toJSON());
+
+// ─── boot -----------------------------------------------------------------------------
+
+async function boot(): Promise<void> {
+  const settings = await loadSettings();
+  camera.zoom = settings.zoom ?? DEFAULT_SETTINGS.zoom;
+
+  const saved = await getProgram(PROGRAM_ID);
+  editor = createEditor(editorEl!, saved?.source ?? STARTER, debounce(autosaveProgram, 1000));
+  editor.focus();
+
+  const saveSettingsDebounced = debounce(() => void saveSettings({ speedMultiplier: settings.speedMultiplier, zoom: camera.zoom, textScale: settings.textScale, spriteDetail: settings.spriteDetail }), 400);
+  window.addEventListener('beforeunload', () => void saveSettings({ speedMultiplier: settings.speedMultiplier, zoom: camera.zoom, textScale: settings.textScale, spriteDetail: settings.spriteDetail }));
+  window.addEventListener('wheel', saveSettingsDebounced, { passive: true });
+}
+
+panelsEl.insertBefore(buildToolbar(), panelsEl.firstChild);
 
 let dragging = false;
 let lastX = 0;
@@ -99,50 +211,6 @@ canvas.addEventListener('wheel', (e) => {
   clampPan(camera, cssW, cssH);
 }, { passive: false });
 
-// ponytail: bounded so a 5-minute run cannot grow the log without limit
-const eventLog: string[] = [];
-function logLine(s: string): void {
-  eventLog.push(s);
-  if (eventLog.length > 200) eventLog.shift();
-}
-
-const client = new WorkerClient({
-  tick: (cells, pos) => {
-    for (const c of cells) {
-      const cell = world.get(c.x, c.y, c.h);
-      if (!cell) continue;
-      if (c.terrain !== undefined) cell.terrain = c.terrain;
-      if (c.plant !== undefined) cell.plant = c.plant;
-      if (c.growth !== undefined) cell.growth = c.growth;
-      if (c.moisture !== undefined) cell.moisture = c.moisture;
-    }
-    mote.x = pos.x;
-    mote.y = pos.y;
-    mote.h = pos.h;
-    mote.facing = pos.facing as typeof mote.facing;
-  },
-  snapshot: (data) => {
-    mote.x = data.mote.x;
-    mote.y = data.mote.y;
-    mote.h = data.mote.h;
-    mote.facing = data.mote.facing;
-  },
-  event: (kind, x, y, h, data) => {
-    logLine(`${kind} @(${x},${y},${h}) ${JSON.stringify(data)}`);
-  },
-  console: (lines) => {
-    for (const l of lines) logLine(`> ${l}`);
-  },
-  error: (e) => {
-    logLine(`ERROR ${e.phase} line ${e.line} col ${e.col}: ${e.message}`);
-  },
-  aborted: (a) => {
-    logLine(`ABORTED ${a.reason} after ${a.ops} ops`);
-  },
-});
-
-client.init(world.toJSON(), mote.toJSON());
-
 function frame(): void {
   draw();
   requestAnimationFrame(frame);
@@ -151,3 +219,4 @@ function frame(): void {
 resize();
 window.addEventListener('resize', resize);
 requestAnimationFrame(frame);
+void boot();
