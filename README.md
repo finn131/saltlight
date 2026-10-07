@@ -23,25 +23,24 @@ Original work in the programming-farming genre. A tribute to the convention, not
 - Canvas 2.5D isometric renderer, painter-sorted, sprites baked procedurally at boot. No WebGL, no image files.
 - Custom Loam VM: tokenizer, parser, AST, generator-based interpreter with an instruction budget and a step debugger.
 - Web Worker sandbox with pause, step, speed multiplier, and a hard instruction cap.
-- CodeMirror 6 for the editor, with autocompletion driven by the runtime builtin table.
+- CodeMirror 6 for the editor, highlighted from the same tokenizer the parser uses.
 - IndexedDB for saves, `.py` import/export for programs.
-- `node --test` with one assert-based interpreter test file. No test framework.
+- `node --test` with assert-based tests. No test framework.
 
 ## Running the project
 
-**Status: design phase. None of the commands below work yet.** They describe the intended workflow, set by the phase plan in [docs/ROADMAP.md](docs/ROADMAP.md).
-
 ```bash
-npm install        # Phase 0
+npm install        # Vite + TypeScript + CodeMirror
 npm run dev        # Vite dev server
 npm run build      # Type-check and bundle to dist/
-npm test           # node --test test/interp.test.ts
+npm test           # node --test, 216 cases
+npm run gate:s7    # Chapter 2 diff gate: VM, renderer and editor unchanged
 ```
-
-The scaffold does not exist yet. Phase 0 creates `index.html`, `package.json`, `src/main.ts`, and `src/style.css`; the VM arrives in Phase 1.
 
 ## Current state
 
-Design complete, implementation not started. The four documents above are the specification: PRD for scope, architecture for structure, roadmap for build order, design for the language and the world.
+Both chapters are implemented. `src/vm` holds the language, `src/game` the world and the two chapters, `src/render` the isometric renderer, `src/ui` the editor and storage, and `src/worker*` the sandbox. The ten tutorial tasks gate on observable program behaviour: pressing Check runs the player's program headlessly and advances only when the trace shows the intended effect. Completing task 10 unlocks free play.
 
-Phase 6 is the MVP. Phase 7, the Deep Trench, is a stretch goal gated on the requirement that the VM, renderer, and editor stay unchanged between the two chapters.
+Chapter 2 is data-only. `src/game/rules/fog.ts` and `src/game/rules/current.ts` plug into rule slots on the world, so the VM, the renderer and the editor are untouched; `npm run gate:s7` proves it between the `chapter-1` and `chapter-2` tags.
+
+Two things are not automated and need a browser: the 60fps frame-rate target over a five-minute farm run, and visual inspection of painter-sort artefacts and overdraw. Everything else has a test.

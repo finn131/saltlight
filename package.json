@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test"
+    "test": "node --test",
+    "gate:s7": "git diff --name-only chapter-1 chapter-2 -- src/vm/ src/render/ src/ui/editor.ts && echo S7-GATE-PASS"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
